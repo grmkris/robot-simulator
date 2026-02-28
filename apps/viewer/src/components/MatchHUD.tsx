@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useArenaStore } from "@/lib/store";
 
 function formatTime(seconds: number): string {
@@ -38,23 +39,31 @@ export function MatchHUD() {
           </div>
         </div>
 
-        {/* Phase badge */}
-        <div className="bg-black/60 backdrop-blur rounded-lg px-3 py-2">
-          <span
-            className={`text-xs font-mono font-bold ${
-              matchPhase === "active"
-                ? "text-green-400"
-                : matchPhase === "finished"
-                  ? "text-yellow-400"
-                  : "text-gray-400"
-            }`}
+        {/* Phase badge + Replays link */}
+        <div className="flex items-center gap-2">
+          <Link
+            href="/replays"
+            className="bg-black/60 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto hover:bg-white/10 transition-colors"
           >
-            {matchPhase === "active" && "FIGHTING"}
-            {matchPhase === "waiting" && "WAITING FOR AGENTS"}
-            {matchPhase === "countdown" && "GET READY"}
-            {matchPhase === "finished" && "MATCH OVER"}
-            {matchPhase === "disconnected" && "CONNECTING..."}
-          </span>
+            <span className="text-xs font-mono text-gray-300">REPLAYS</span>
+          </Link>
+          <div className="bg-black/60 backdrop-blur rounded-lg px-3 py-2">
+            <span
+              className={`text-xs font-mono font-bold ${
+                matchPhase === "active"
+                  ? "text-green-400"
+                  : matchPhase === "finished"
+                    ? "text-yellow-400"
+                    : "text-gray-400"
+              }`}
+            >
+              {matchPhase === "active" && "FIGHTING"}
+              {matchPhase === "waiting" && "WAITING FOR AGENTS"}
+              {matchPhase === "countdown" && "GET READY"}
+              {matchPhase === "finished" && "MATCH OVER"}
+              {matchPhase === "disconnected" && "CONNECTING..."}
+            </span>
+          </div>
         </div>
       </div>
 

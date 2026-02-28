@@ -48,12 +48,12 @@ export class RobotFactory {
     )
       .setDensity(CHASSIS_MASS / chassisVol)
       .setFriction(0.8)
-      .setRestitution(0.1); // Low bounce — sumo bots absorb impact
+      .setRestitution(0.3); // Some bounce on collision for drama
     this.world.createCollider(chassisCollider, chassis);
 
-    // Damping to simulate ground friction and prevent runaway velocity
-    chassis.setLinearDamping(2.5);
-    chassis.setAngularDamping(3.0);
+    // Moderate damping — fast movement, controlled spinning
+    chassis.setLinearDamping(1.0);
+    chassis.setAngularDamping(2.0);
 
     // ── Left Arm ──
     const leftArmX = spawnX - CHASSIS_HALF_EXTENTS.x - ARM_HALF_EXTENTS.x;
@@ -118,7 +118,7 @@ export class RobotFactory {
     )
       .setDensity(ARM_MASS / armVol)
       .setFriction(0.6)
-      .setRestitution(0.1);
+      .setRestitution(0.4); // Arms bounce off on impact
     this.world.createCollider(collider, body);
 
     return body;

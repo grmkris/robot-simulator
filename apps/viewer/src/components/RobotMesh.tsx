@@ -7,7 +7,7 @@ import type { ViewerRobotState } from "@/lib/types";
 
 // Robot dimensions (must match server constants)
 const CHASSIS = { x: 0.5, y: 0.3, z: 0.5 };
-const ARM = { x: 0.1, y: 0.1, z: 0.6 };
+const ARM = { x: 0.12, y: 0.12, z: 0.7 };
 
 interface RobotMeshProps {
   state: ViewerRobotState;
@@ -20,15 +20,17 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
   const leftArmRef = useRef<THREE.Group>(null);
   const rightArmRef = useRef<THREE.Group>(null);
   const targetQuat = useRef(new THREE.Quaternion());
+  const targetPos = useRef(new THREE.Vector3());
 
   useFrame((_frameState, delta) => {
     if (!groupRef.current) return;
 
     // Smooth position interpolation
     const [px, py, pz] = state.position;
+    targetPos.current.set(px, py, pz);
     groupRef.current.position.lerp(
-      new THREE.Vector3(px, py, pz),
-      Math.min(1, delta * 20)
+      targetPos.current,
+      Math.min(1, delta * 25)
     );
 
     // Smooth rotation interpolation
@@ -40,7 +42,7 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
     );
     groupRef.current.quaternion.slerp(
       targetQuat.current,
-      Math.min(1, delta * 20)
+      Math.min(1, delta * 25)
     );
 
     // Arm angles (rotate around Y axis at the joint pivot)
@@ -48,14 +50,14 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
       leftArmRef.current.rotation.y = THREE.MathUtils.lerp(
         leftArmRef.current.rotation.y,
         state.armAngles[0],
-        Math.min(1, delta * 20)
+        Math.min(1, delta * 25)
       );
     }
     if (rightArmRef.current) {
       rightArmRef.current.rotation.y = THREE.MathUtils.lerp(
         rightArmRef.current.rotation.y,
         state.armAngles[1],
-        Math.min(1, delta * 20)
+        Math.min(1, delta * 25)
       );
     }
   });
@@ -68,32 +70,29 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
         <meshStandardMaterial
           color={color}
           emissive={emissiveColor}
-          emissiveIntensity={0.3}
-          metalness={0.6}
-          roughness={0.3}
+          emissiveIntensity={0.4}
+          metalness={0.7}
+          roughness={0.2}
         />
       </mesh>
 
-      {/* Eyes (front indicators) */}
-      <mesh position={[0.15, 0.15, CHASSIS.z - 0.02]}>
-        <sphereGeometry args={[0.06, 8, 8]} />
+      {/* Eyes (front indicators) — bigger, brighter */}
+      <mesh position={[0.18, 0.15, CHASSIS.z - 0.02]}>
+        <sphereGeometry args={[0.08, 12, 12]} />
         <meshStandardMaterial
           color="#ffffff"
           emissive="#ffffff"
-          emissiveIntensity={0.8}
+          emissiveIntensity={1.0}
         />
       </mesh>
-      <mesh position={[-0.15, 0.15, CHASSIS.z - 0.02]}>
-        <sphereGeometry args={[0.06, 8, 8]} />
+      <mesh position={[-0.18, 0.15, CHASSIS.z - 0.02]}>
+        <sphereGeometry args={[0.08, 12, 12]} />
         <meshStandardMaterial
           color="#ffffff"
           emissive="#ffffff"
-          emissiveIntensity={0.8}
+          emissiveIntensity={1.0}
         />
       </mesh>
-
-      {/* Label */}
-      {/* (Text via drei would need font — keeping it simple with just geometry) */}
 
       {/* Left Arm — pivots at chassis left edge */}
       <group
@@ -108,18 +107,18 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
           <meshStandardMaterial
             color={color}
             emissive={emissiveColor}
-            emissiveIntensity={0.15}
-            metalness={0.7}
-            roughness={0.4}
+            emissiveIntensity={0.2}
+            metalness={0.8}
+            roughness={0.3}
           />
         </mesh>
-        {/* Fist */}
-        <mesh position={[0, 0, ARM.z + 0.08]}>
-          <sphereGeometry args={[0.12, 8, 8]} />
+        {/* Fist — big glowing sphere */}
+        <mesh position={[0, 0, ARM.z + 0.1]}>
+          <sphereGeometry args={[0.16, 12, 12]} />
           <meshStandardMaterial
             color={emissiveColor}
             emissive={emissiveColor}
-            emissiveIntensity={0.5}
+            emissiveIntensity={0.8}
           />
         </mesh>
       </group>
@@ -137,17 +136,18 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
           <meshStandardMaterial
             color={color}
             emissive={emissiveColor}
-            emissiveIntensity={0.15}
-            metalness={0.7}
-            roughness={0.4}
+            emissiveIntensity={0.2}
+            metalness={0.8}
+            roughness={0.3}
           />
         </mesh>
-        <mesh position={[0, 0, ARM.z + 0.08]}>
-          <sphereGeometry args={[0.12, 8, 8]} />
+        {/* Fist — big glowing sphere */}
+        <mesh position={[0, 0, ARM.z + 0.1]}>
+          <sphereGeometry args={[0.16, 12, 12]} />
           <meshStandardMaterial
             color={emissiveColor}
             emissive={emissiveColor}
-            emissiveIntensity={0.5}
+            emissiveIntensity={0.8}
           />
         </mesh>
       </group>
