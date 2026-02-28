@@ -2,8 +2,9 @@
  * AI Actuator Arena — Server Entry Point
  *
  * Hono HTTP + WebSocket server running on Bun.
- * Serves agent connections (/ws/agent), spectator streams (/ws/spectator),
- * and REST endpoints for match state.
+ * Agent API: HTTP endpoints (/api/join, /api/game-state, /api/action, /api/leave)
+ * Viewer:    WebSocket (/ws/spectator) for real-time 3D streaming
+ * Replays:   REST endpoints (/api/replays)
  */
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -11,7 +12,8 @@ import { websocket } from "hono/bun";
 import { initPhysics } from "@ai-arena/sim";
 import { MatchManager } from "./match-manager.js";
 import { createWSRoutes } from "./ws-handler.js";
-import { loadReplay, listReplays, listReplaySummaries } from "./replay-store.js";
+import { createAgentRoutes } from "./http-agent-handler.js";
+import { loadReplay, listReplaySummaries } from "./replay-store.js";
 
 // Initialize Rapier WASM at startup
 console.log("[Server] Initializing Rapier3D WASM...");
@@ -48,7 +50,6 @@ app.get("/api/match/state", (c) => {
 // Replay endpoints
 app.get("/api/replays", async (c) => {
   const summaries = await listReplaySummaries();
-  // Also include legacy format for compatibility
   const ids = summaries.map((s) => s.matchId);
   return c.json({ replays: ids, summaries });
 });
@@ -60,7 +61,11 @@ app.get("/api/replays/:id", async (c) => {
   return c.json({ error: "Replay not found" }, 404);
 });
 
-// WebSocket routes
+// HTTP Agent API routes
+const agentRoutes = createAgentRoutes(matchManager);
+app.route("/api", agentRoutes);
+
+// WebSocket routes (spectator only)
 const wsRoutes = createWSRoutes(matchManager);
 app.route("/ws", wsRoutes);
 
@@ -68,9 +73,16 @@ app.route("/ws", wsRoutes);
 const PORT = Number(process.env.PORT) || 3000;
 
 console.log(`[Server] Starting on port ${PORT}...`);
-console.log(`[Server] Agent WS:     ws://localhost:${PORT}/ws/agent`);
-console.log(`[Server] Spectator WS: ws://localhost:${PORT}/ws/spectator`);
-console.log(`[Server] Health:       http://localhost:${PORT}/health`);
+console.log(`[Server] ── Agent HTTP API ──`);
+console.log(`[Server]   POST http://localhost:${PORT}/api/join`);
+console.log(`[Server]   GET  http://localhost:${PORT}/api/game-state`);
+console.log(`[Server]   POST http://localhost:${PORT}/api/action`);
+console.log(`[Server]   POST http://localhost:${PORT}/api/leave`);
+console.log(`[Server] ── Viewer ──`);
+console.log(`[Server]   WS   ws://localhost:${PORT}/ws/spectator`);
+console.log(`[Server] ── Other ──`);
+console.log(`[Server]   GET  http://localhost:${PORT}/health`);
+console.log(`[Server]   GET  http://localhost:${PORT}/api/replays`);
 
 export default {
   port: PORT,

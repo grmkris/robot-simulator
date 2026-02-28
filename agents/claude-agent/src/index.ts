@@ -10,8 +10,16 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AgentAction, AgentId, WorldState } from "@ai-arena/protocol";
 import type { DecisionContext } from "@ai-arena/agent-sdk";
+import { resolveAnthropicAuth } from "./auth.js";
 
-const anthropic = new Anthropic();
+const auth = resolveAnthropicAuth();
+if (auth) {
+  console.log(`[ClaudeAgent] Auth: ${auth.source}`);
+}
+const anthropic = new Anthropic({
+  apiKey: auth?.apiKey ?? undefined,
+  authToken: auth?.authToken ?? undefined,
+});
 
 const SYSTEM_PROMPT = `You are a robot fighter in a sumo-style arena. Two robots charge at each other automatically — you only control your two arms.
 

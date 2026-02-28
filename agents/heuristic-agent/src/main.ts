@@ -1,20 +1,21 @@
 /**
- * Heuristic Agent — WebSocket client entry point.
+ * Heuristic Agent — HTTP client entry point.
  * Connects to the arena server and plays with a chase-opponent strategy.
  */
-import { ArenaClient } from "@ai-arena/agent-sdk";
+import { ArenaHttpClient } from "@ai-arena/agent-sdk";
 import { heuristicAgent } from "./index.js";
 
-const SERVER_URL = process.env.SERVER_URL || "ws://localhost:3000/ws/agent";
+const SERVER_URL = process.env.SERVER_URL || "http://localhost:3000";
 
-const client = new ArenaClient({
+const client = new ArenaHttpClient({
   serverUrl: SERVER_URL,
   name: "HeuristicBot",
   brain: heuristicAgent,
+  pollIntervalMs: 500,
   onMatchEnd: (winner, reason) => {
     console.log(`[HeuristicBot] Match result: winner=${winner ?? "DRAW"} reason=${reason}`);
     setTimeout(() => process.exit(0), 500);
   },
 });
 
-client.connect();
+await client.connect();

@@ -1,16 +1,17 @@
 /**
- * Aggressive Agent — WebSocket client entry point.
+ * Aggressive Agent — HTTP client entry point.
  * Connects to the arena server and plays with windmill slam strategy.
  */
-import { ArenaClient } from "@ai-arena/agent-sdk";
+import { ArenaHttpClient } from "@ai-arena/agent-sdk";
 import { aggressiveAgent } from "./index.js";
 
-const SERVER_URL = process.env.SERVER_URL || "ws://localhost:3000/ws/agent";
+const SERVER_URL = process.env.SERVER_URL || "http://localhost:3000";
 
-const client = new ArenaClient({
+const client = new ArenaHttpClient({
   serverUrl: SERVER_URL,
   name: "AggressiveBot",
   brain: aggressiveAgent,
+  pollIntervalMs: 500,
   onMatchEnd: (winner, reason) => {
     console.log(
       `[AggressiveBot] Match result: winner=${winner ?? "DRAW"} reason=${reason}`
@@ -19,4 +20,4 @@ const client = new ArenaClient({
   },
 });
 
-client.connect();
+await client.connect();

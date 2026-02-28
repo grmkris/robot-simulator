@@ -1,11 +1,13 @@
 /**
- * Match lifecycle orchestrator — Mind Games Edition.
+ * Match lifecycle orchestrator — HTTP Agent API Edition (v3).
  *
- * Key changes from v1:
- * - 2Hz decision cadence (agents get decision_window every 500ms)
- * - Action persistence (last action holds between decisions)
- * - Thought tracking (public + private thoughts for mind games)
- * - Tactical context (pre-computed distances/speeds for LLM agents)
+ * Key changes from Mind Games (v2):
+ * - No more WebSocket agent connections — agents use HTTP pull API
+ * - Token-based auth (UUID per agent)
+ * - Agent-controlled polling rate (no server-pushed decision cadence)
+ * - Inactivity timeout replaces consecutive-timeout forfeit
+ * - Action persistence still works — last action holds until next submission
+ * - Thoughts still work — submitted with each action
  */
 import { Simulation, GameLoop, initPhysics } from "@ai-arena/sim";
 import type { ActionProvider } from "@ai-arena/sim";
@@ -15,16 +17,14 @@ import type {
   MatchResult,
   WorldState,
   TacticalContext,
+  GameStateResponse,
 } from "@ai-arena/protocol";
 import {
-  PROTOCOL_VERSION,
   ARENA_RADIUS,
   TICK_RATE,
   MATCH_DURATION_S,
   VIEWER_BROADCAST_INTERVAL,
-  AGENT_DECISION_RATE,
-  AGENT_DECISION_DEADLINE_MS,
-  AGENT_MAX_CONSECUTIVE_TIMEOUTS,
+  AGENT_INACTIVITY_TIMEOUT_MS,
 } from "@ai-arena/protocol";
 import type { WSContext } from "hono/ws";
 import {
@@ -36,16 +36,16 @@ import {
 const NO_OP: AgentAction = { leftArmTarget: 0, rightArmTarget: 0 };
 
 interface ConnectedAgent {
-  ws: WSContext;
+  /** Bearer token for HTTP auth */
+  token: string;
+  /** Display name */
   name: string;
-  /** Pending action from newest message (consumed into confirmedAction) */
-  pendingAction: AgentAction | null;
-  /** Persists between decisions — the robot keeps doing this */
+  /** Persists between actions — the robot keeps doing this */
   confirmedAction: AgentAction;
-  /** Which decision round the agent last responded to */
-  lastDecisionRound: number;
-  /** Count of consecutive missed decision windows */
-  consecutiveTimeouts: number;
+  /** Timestamp of last poll (for inactivity detection) */
+  lastPollTime: number;
+  /** Tick when last action was submitted */
+  lastActionTick: number;
   /** Public thought — visible to opponent + spectators */
   lastThought: string | null;
   /** Private thought — visible to spectators only */
@@ -54,14 +54,16 @@ interface ConnectedAgent {
 
 export class MatchManager {
   private agents = new Map<AgentId, ConnectedAgent>();
+  private tokenToAgent = new Map<string, AgentId>();
   private sim: Simulation | null = null;
   private loop: GameLoop | null = null;
   private _currentState: WorldState | null = null;
   private spectators = new Set<WSContext>();
   private ticksSinceLastBroadcast = 0;
   private viewerFrameHistory: ViewerFrame[] = [];
-  private decisionRound = 0;
-  private decisionInterval: ReturnType<typeof setInterval> | null = null;
+  private inactivityTimer: ReturnType<typeof setInterval> | null = null;
+  /** Store last match result so agents can poll for it */
+  private lastResult: MatchResult | null = null;
 
   get currentState(): WorldState | null {
     return this._currentState;
@@ -71,35 +73,143 @@ export class MatchManager {
     return this.agents.size;
   }
 
-  /** Assign an agent ID to a new WebSocket connection */
-  assignAgent(ws: WSContext, name: string): AgentId | null {
+  // ══════════════════════════════════════════
+  // HTTP Agent API Methods
+  // ══════════════════════════════════════════
+
+  /** Register a new agent. Returns { agentId, token } or null if full. */
+  assignAgent(name: string): { agentId: AgentId; token: string } | null {
     if (this.agents.size >= 2) return null;
 
     const id: AgentId = this.agents.has(0) ? 1 : 0;
+    const token = crypto.randomUUID();
+
     this.agents.set(id, {
-      ws,
+      token,
       name,
-      pendingAction: null,
       confirmedAction: { ...NO_OP },
-      lastDecisionRound: -1,
-      consecutiveTimeouts: 0,
+      lastPollTime: Date.now(),
+      lastActionTick: 0,
       lastThought: null,
       lastPrivateThought: null,
     });
+    this.tokenToAgent.set(token, id);
 
-    console.log(`[Match] Agent "${name}" assigned as Robot ${id}`);
+    console.log(`[Match] Agent "${name}" assigned as Robot ${id} (token=${token.slice(0, 8)}...)`);
+    return { agentId: id, token };
+  }
 
-    // Send welcome message with decision rate
-    this.sendToAgent(id, {
-      type: "welcome",
-      protocolVersion: PROTOCOL_VERSION,
-      agentId: id,
-      arenaRadius: ARENA_RADIUS,
-      tickRate: TICK_RATE,
-      decisionRate: AGENT_DECISION_RATE,
-    });
+  /** Resolve a Bearer token to an AgentId (or null if invalid) */
+  resolveToken(token: string): AgentId | null {
+    return this.tokenToAgent.get(token) ?? null;
+  }
 
-    return id;
+  /** Build game state response for a specific agent */
+  getGameStateForAgent(agentId: AgentId): GameStateResponse {
+    const agent = this.agents.get(agentId);
+    if (!agent) return { status: "waiting" };
+
+    // Update heartbeat
+    agent.lastPollTime = Date.now();
+
+    // No sim yet → waiting
+    if (!this.sim || !this._currentState) {
+      // Match finished (result stored but sim cleaned up)
+      if (this.lastResult) {
+        return {
+          status: "finished",
+          winner: this.lastResult.winner,
+          reason: this.lastResult.reason,
+          message:
+            this.lastResult.winner === agentId
+              ? "You won!"
+              : this.lastResult.winner === null
+                ? "Draw!"
+                : "You lost.",
+        };
+      }
+      return { status: "waiting" };
+    }
+
+    const state = this._currentState;
+
+    // Countdown
+    if (state.matchPhase === "countdown") {
+      return {
+        status: "countdown",
+        tick: state.tick,
+        elapsed: state.elapsed,
+        you: agentId,
+        matchPhase: state.matchPhase,
+      };
+    }
+
+    // Active match — full state with tactical context
+    const opponentId: AgentId = agentId === 0 ? 1 : 0;
+    const opponent = this.agents.get(opponentId);
+    const tactical = this.buildTacticalContext(state);
+
+    return {
+      status: "active",
+      tick: state.tick,
+      elapsed: state.elapsed,
+      you: agentId,
+      robots: state.robots,
+      matchPhase: state.matchPhase,
+      tactical: agentId === 0 ? tactical : this.flipTactical(tactical),
+      yourLastAction: agent.confirmedAction,
+      opponentLastThought: opponent?.lastThought ?? null,
+    };
+  }
+
+  /** Receive an action from an agent via HTTP */
+  receiveAction(agentId: AgentId, action: AgentAction): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+
+    // Update confirmed action (persists until next submission)
+    agent.confirmedAction = {
+      leftArmTarget: action.leftArmTarget,
+      rightArmTarget: action.rightArmTarget,
+    };
+
+    // Track thoughts
+    agent.lastThought = action.thought ?? null;
+    agent.lastPrivateThought = action.privateThought ?? null;
+
+    // Track timing
+    agent.lastActionTick = this._currentState?.tick ?? 0;
+    agent.lastPollTime = Date.now(); // action counts as activity
+
+    const thoughtPreview = agent.lastThought
+      ? ` 💭 "${agent.lastThought.slice(0, 50)}"`
+      : "";
+    console.log(
+      `[Match] Agent ${agentId} ("${agent.name}") action: L=${action.leftArmTarget.toFixed(2)} R=${action.rightArmTarget.toFixed(2)}${thoughtPreview}`
+    );
+  }
+
+  /** Handle voluntary agent leave (POST /api/leave) */
+  handleAgentLeave(agentId: AgentId): void {
+    const agent = this.agents.get(agentId);
+    console.log(
+      `[Match] Agent "${agent?.name}" (Robot ${agentId}) left`
+    );
+
+    // Clean up token mapping
+    if (agent) {
+      this.tokenToAgent.delete(agent.token);
+    }
+    this.agents.delete(agentId);
+
+    if (this.sim && this.sim.phase === "active") {
+      const winner: AgentId = agentId === 0 ? 1 : 0;
+      this.handleMatchEnd({
+        winner,
+        reason: "disconnect",
+        finalTick: this.sim.currentTick,
+      });
+    }
   }
 
   /** Start a match if both agents are connected */
@@ -116,7 +226,7 @@ export class MatchManager {
     this.sim = new Simulation();
     await this.sim.init();
     this.viewerFrameHistory = [];
-    this.decisionRound = 0;
+    this.lastResult = null;
 
     // ACTION PERSISTENCE: return confirmedAction (never null)
     const actionProvider: ActionProvider = (
@@ -149,63 +259,13 @@ export class MatchManager {
 
     this.loop.start();
 
-    // Start 2Hz decision cadence
-    this.startDecisionCadence();
+    // Start inactivity checker (1Hz)
+    this.startInactivityChecker();
   }
 
-  /** Receive an action from an agent (round-based or tick-based) */
-  receiveAction(
-    agentId: AgentId,
-    action: AgentAction,
-    round?: number
-  ): void {
-    const agent = this.agents.get(agentId);
-    if (!agent) return;
-
-    // Reject actions for rounds that are too old
-    if (round !== undefined && round < this.decisionRound - 1) return;
-
-    // Update confirmed action (persists until next decision)
-    agent.confirmedAction = {
-      leftArmTarget: action.leftArmTarget,
-      rightArmTarget: action.rightArmTarget,
-    };
-
-    // Track thoughts
-    agent.lastThought = action.thought ?? null;
-    agent.lastPrivateThought = action.privateThought ?? null;
-
-    // Track decision round
-    if (round !== undefined) {
-      agent.lastDecisionRound = round;
-    }
-    agent.consecutiveTimeouts = 0;
-
-    const thoughtPreview = agent.lastThought
-      ? ` 💭 "${agent.lastThought.slice(0, 50)}"`
-      : "";
-    console.log(
-      `[Match] Agent ${agentId} ("${agent.name}") action: L=${action.leftArmTarget.toFixed(2)} R=${action.rightArmTarget.toFixed(2)}${thoughtPreview}`
-    );
-  }
-
-  /** Handle agent disconnection */
-  handleDisconnect(agentId: AgentId): void {
-    const agent = this.agents.get(agentId);
-    console.log(
-      `[Match] Agent "${agent?.name}" (Robot ${agentId}) disconnected`
-    );
-    this.agents.delete(agentId);
-
-    if (this.sim && this.sim.phase === "active") {
-      const winner: AgentId = agentId === 0 ? 1 : 0;
-      this.handleMatchEnd({
-        winner,
-        reason: "disconnect",
-        finalTick: this.sim.currentTick,
-      });
-    }
-  }
+  // ══════════════════════════════════════════
+  // Spectator WebSocket (unchanged)
+  // ══════════════════════════════════════════
 
   /** Add a spectator WebSocket */
   addSpectator(ws: WSContext): void {
@@ -247,68 +307,38 @@ export class MatchManager {
     );
   }
 
-  // ── Decision Cadence ──
+  // ══════════════════════════════════════════
+  // Inactivity Detection
+  // ══════════════════════════════════════════
 
-  private startDecisionCadence(): void {
-    const intervalMs = 1000 / AGENT_DECISION_RATE; // 500ms
+  private startInactivityChecker(): void {
+    this.inactivityTimer = setInterval(() => {
+      if (!this.sim || this.sim.phase !== "active") return;
 
-    this.decisionInterval = setInterval(() => {
-      if (!this.sim || this.sim.phase !== "active" || !this._currentState)
-        return;
-
-      const state = this._currentState;
-      const round = this.decisionRound;
-
-      // Build tactical context
-      const tactical = this.buildTacticalContext(state);
-
-      // Send decision window to each agent
+      const now = Date.now();
       for (const [id, agent] of this.agents) {
-        const opponentId: AgentId = id === 0 ? 1 : 0;
-        const opponent = this.agents.get(opponentId);
-
-        this.sendToAgent(id, {
-          type: "decision_window",
-          round,
-          tick: state.tick,
-          you: id,
-          robots: state.robots,
-          matchPhase: state.matchPhase,
-          tactical: id === 0 ? tactical : this.flipTactical(tactical),
-          yourLastAction: agent.confirmedAction,
-          opponentLastThought: opponent?.lastThought ?? null,
-          deadline_ms: AGENT_DECISION_DEADLINE_MS,
-        });
-      }
-
-      // Check timeouts for previous round
-      if (round > 0) {
-        for (const [id, agent] of this.agents) {
-          if (agent.lastDecisionRound < round - 1) {
-            agent.consecutiveTimeouts++;
-            if (
-              agent.consecutiveTimeouts >= AGENT_MAX_CONSECUTIVE_TIMEOUTS
-            ) {
-              console.log(
-                `[Match] Agent ${id} ("${agent.name}") forfeited: ${AGENT_MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts`
-              );
-              this.handleDisconnect(id);
-              return;
-            }
-          }
+        const inactiveMs = now - agent.lastPollTime;
+        if (inactiveMs > AGENT_INACTIVITY_TIMEOUT_MS) {
+          console.log(
+            `[Match] Agent ${id} ("${agent.name}") forfeited: inactive for ${(inactiveMs / 1000).toFixed(1)}s`
+          );
+          this.handleAgentLeave(id);
+          return; // handleMatchEnd will clean up
         }
       }
-
-      this.decisionRound++;
-    }, intervalMs);
+    }, 1000); // Check every second
   }
 
-  private stopDecisionCadence(): void {
-    if (this.decisionInterval) {
-      clearInterval(this.decisionInterval);
-      this.decisionInterval = null;
+  private stopInactivityChecker(): void {
+    if (this.inactivityTimer) {
+      clearInterval(this.inactivityTimer);
+      this.inactivityTimer = null;
     }
   }
+
+  // ══════════════════════════════════════════
+  // Tactical Context
+  // ══════════════════════════════════════════
 
   /** Build tactical context from robot 0's perspective */
   private buildTacticalContext(state: WorldState): TacticalContext {
@@ -351,7 +381,7 @@ export class MatchManager {
       opponentSpeed: Math.round(opponentSpeed * 100) / 100,
       timeRemainingS:
         Math.round((MATCH_DURATION_S - state.elapsed) * 10) / 10,
-      round: this.decisionRound,
+      round: 0, // No more rounds in HTTP mode — kept for interface compat
     };
   }
 
@@ -366,7 +396,9 @@ export class MatchManager {
     };
   }
 
-  // ── Internal ──
+  // ══════════════════════════════════════════
+  // Internal Helpers
+  // ══════════════════════════════════════════
 
   private buildViewerRobot(
     label: string,
@@ -403,7 +435,7 @@ export class MatchManager {
           privateThought: a1?.lastPrivateThought ?? null,
         },
       },
-      round: this.decisionRound,
+      round: 0,
       agentNames: {
         A: a0?.name ?? "Robot A",
         B: a1?.name ?? "Robot B",
@@ -461,7 +493,7 @@ export class MatchManager {
           privateThought: a1?.lastPrivateThought ?? null,
         },
       },
-      round: this.decisionRound,
+      round: 0,
     });
   }
 
@@ -489,19 +521,12 @@ export class MatchManager {
     }
   }
 
-  private sendToAgent(agentId: AgentId, msg: unknown): void {
-    const agent = this.agents.get(agentId);
-    if (!agent) return;
-    try {
-      agent.ws.send(JSON.stringify(msg));
-    } catch {
-      // WS might be closed
-    }
-  }
-
   private handleMatchEnd(result: MatchResult): void {
     this.loop?.stop();
-    this.stopDecisionCadence();
+    this.stopInactivityChecker();
+
+    // Store result for polling
+    this.lastResult = result;
 
     console.log(
       `[Match] Ended: winner=${result.winner ?? "DRAW"} reason=${result.reason} tick=${result.finalTick}`
@@ -513,16 +538,7 @@ export class MatchManager {
       reason: result.reason,
     });
 
-    // Notify agents
-    for (const [, agent] of this.agents) {
-      try {
-        agent.ws.send(endMsg);
-      } catch {
-        // ignore
-      }
-    }
-
-    // Notify spectators
+    // Notify spectators (agents will see result via polling)
     for (const ws of this.spectators) {
       try {
         ws.send(endMsg);
@@ -531,7 +547,7 @@ export class MatchManager {
       }
     }
 
-    // Save replay with viewer frames (now includes thoughts)
+    // Save replay with viewer frames (includes thoughts)
     if (this.sim) {
       const matchId = generateMatchId();
       const agentNames = {
@@ -547,16 +563,23 @@ export class MatchManager {
       ).catch((err) => console.error("[Replay] Failed to save:", err));
     }
 
-    // Cleanup
+    // Cleanup sim but keep agents + tokens so they can poll for result
     this.sim?.destroy();
     this.sim = null;
     this.loop = null;
-    this.agents.clear();
     this._currentState = null;
     this.ticksSinceLastBroadcast = 0;
     this.viewerFrameHistory = [];
-    this.decisionRound = 0;
 
-    console.log("[Match] Reset. Waiting for new agents...");
+    // Schedule full cleanup after agents have had time to poll for result
+    setTimeout(() => {
+      console.log("[Match] Full cleanup. Clearing agents and tokens.");
+      for (const [, agent] of this.agents) {
+        this.tokenToAgent.delete(agent.token);
+      }
+      this.agents.clear();
+      this.lastResult = null;
+      console.log("[Match] Reset. Waiting for new agents...");
+    }, 15_000); // 15 seconds for agents to see the result
   }
 }

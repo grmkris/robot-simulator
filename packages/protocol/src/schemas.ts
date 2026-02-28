@@ -68,3 +68,9 @@ export const MatchPhaseSchema = z.enum([
   "active",
   "finished",
 ]);
+
+// ── HTTP API Request Schemas ──
+
+export const JoinRequestSchema = z.object({
+  name: z.string().min(1).max(32),
+});

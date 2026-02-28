@@ -1,27 +1,41 @@
 /**
- * Claude Agent — WebSocket client entry point.
+ * Claude Agent — HTTP client entry point.
  * Connects to the arena server with a Claude-powered AI brain.
  *
- * Requires ANTHROPIC_API_KEY environment variable.
+ * Auth (checked in order):
+ * 1. ANTHROPIC_API_KEY env var
+ * 2. ANTHROPIC_AUTH_TOKEN env var
+ * 3. Claude Code OAuth token from ~/.claude/.credentials.json
  */
-import { ArenaClient } from "@ai-arena/agent-sdk";
-import { claudeBrain } from "./index.js";
+import { ArenaHttpClient } from "@ai-arena/agent-sdk";
+import { resolveAnthropicAuth } from "./auth.js";
 
-if (!process.env.ANTHROPIC_API_KEY) {
-  console.error("[ClaudeAgent] ERROR: ANTHROPIC_API_KEY environment variable is required");
+const auth = resolveAnthropicAuth();
+if (!auth) {
+  console.error(
+    "[ClaudeAgent] ERROR: No Anthropic authentication found.\n" +
+      "  Options:\n" +
+      "  1. Set ANTHROPIC_API_KEY environment variable\n" +
+      "  2. Set ANTHROPIC_AUTH_TOKEN environment variable\n" +
+      "  3. Have Claude Code credentials at ~/.claude/.credentials.json"
+  );
   process.exit(1);
 }
 
-const SERVER_URL = process.env.SERVER_URL || "ws://localhost:3000/ws/agent";
+// Dynamic import so auth check runs before the SDK initializes
+const { claudeBrain } = await import("./index.js");
+
+const SERVER_URL = process.env.SERVER_URL || "http://localhost:3000";
 const AGENT_NAME = process.env.AGENT_NAME || "Claude";
 
 console.log(`[ClaudeAgent] Starting "${AGENT_NAME}" with Claude Haiku 4.5`);
 console.log(`[ClaudeAgent] Server: ${SERVER_URL}`);
 
-const client = new ArenaClient({
+const client = new ArenaHttpClient({
   serverUrl: SERVER_URL,
   name: AGENT_NAME,
   brain: claudeBrain,
+  pollIntervalMs: 1000, // LLM agent — longer interval for API call headroom
   onMatchEnd: (winner, reason) => {
     console.log(
       `[ClaudeAgent] Match result: winner=${winner ?? "DRAW"} reason=${reason}`
@@ -33,4 +47,4 @@ const client = new ArenaClient({
   },
 });
 
-client.connect();
+await client.connect();

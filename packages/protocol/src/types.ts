@@ -110,3 +110,41 @@ export interface ViewerState {
   /** Agent names */
   agentNames?: { A: string; B: string };
 }
+
+// ═══════════════════════════════════════════════
+// HTTP Agent API Response Types
+// ═══════════════════════════════════════════════
+
+/** Response from POST /api/join */
+export interface JoinResponse {
+  token: string;
+  agentId: AgentId;
+  config: {
+    arenaRadius: number;
+    tickRate: number;
+    matchDurationS: number;
+  };
+}
+
+/** Response from GET /api/game-state */
+export interface GameStateResponse {
+  status: "waiting" | "countdown" | "active" | "finished";
+  tick?: number;
+  elapsed?: number;
+  you?: AgentId;
+  robots?: [RobotState, RobotState];
+  matchPhase?: MatchPhase;
+  tactical?: TacticalContext;
+  yourLastAction?: AgentAction;
+  opponentLastThought?: string | null;
+  // Finished state
+  winner?: AgentId | null;
+  reason?: string;
+  message?: string;
+}
+
+/** Response from POST /api/action */
+export interface ActionResponse {
+  ok: boolean;
+  tick: number;
+}

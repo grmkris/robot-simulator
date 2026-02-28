@@ -29,17 +29,12 @@ export const MATCH_DURATION_TICKS = MATCH_DURATION_S * TICK_RATE;
 export const RING_OUT_Y_THRESHOLD = -2;
 export const RING_OUT_DISTANCE_MARGIN = 1; // beyond arena radius
 
-// ── Match Rules ──
-export const MATCH_DURATION_S_LEGACY = MATCH_DURATION_S; // backward compat
-
 // ── Protocol ──
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const MAX_AGENTS = 2;
 export const VIEWER_BROADCAST_RATE = 30; // Hz — smoother viewer updates
 export const VIEWER_BROADCAST_INTERVAL = Math.floor(TICK_RATE / VIEWER_BROADCAST_RATE);
 
-// ── Agent Decision Cadence (Mind Games mode) ──
-export const AGENT_DECISION_RATE = 2; // Hz — 2 decisions per second
-export const AGENT_DECISION_INTERVAL = Math.floor(TICK_RATE / AGENT_DECISION_RATE); // 30 ticks
-export const AGENT_DECISION_DEADLINE_MS = 4000; // 4s hard timeout per decision window
-export const AGENT_MAX_CONSECUTIVE_TIMEOUTS = 5; // forfeit after this many missed windows
+// ── Agent HTTP API ──
+/** If an agent hasn't polled GET /api/game-state for this long, forfeit them */
+export const AGENT_INACTIVITY_TIMEOUT_MS = 10_000; // 10 seconds
