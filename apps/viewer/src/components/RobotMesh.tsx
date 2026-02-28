@@ -3,19 +3,26 @@
 import { useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import type { ViewerRobotState } from "@/lib/types";
 
 // Robot dimensions (must match server constants)
 const CHASSIS = { x: 0.5, y: 0.3, z: 0.5 };
 const ARM = { x: 0.12, y: 0.12, z: 0.7 };
 
 interface RobotMeshProps {
-  state: ViewerRobotState;
+  position: [number, number, number];
+  rotation: [number, number, number, number];
+  armAngles: [number, number];
   color: string;
   emissiveColor: string;
 }
 
-export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
+export function RobotMesh({
+  position,
+  rotation,
+  armAngles,
+  color,
+  emissiveColor,
+}: RobotMeshProps) {
   const groupRef = useRef<THREE.Group>(null);
   const leftArmRef = useRef<THREE.Group>(null);
   const rightArmRef = useRef<THREE.Group>(null);
@@ -26,20 +33,14 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
     if (!groupRef.current) return;
 
     // Smooth position interpolation
-    const [px, py, pz] = state.position;
-    targetPos.current.set(px, py, pz);
+    targetPos.current.set(position[0], position[1], position[2]);
     groupRef.current.position.lerp(
       targetPos.current,
       Math.min(1, delta * 25)
     );
 
     // Smooth rotation interpolation
-    targetQuat.current.set(
-      state.rotation[0],
-      state.rotation[1],
-      state.rotation[2],
-      state.rotation[3]
-    );
+    targetQuat.current.set(rotation[0], rotation[1], rotation[2], rotation[3]);
     groupRef.current.quaternion.slerp(
       targetQuat.current,
       Math.min(1, delta * 25)
@@ -49,14 +50,14 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
     if (leftArmRef.current) {
       leftArmRef.current.rotation.y = THREE.MathUtils.lerp(
         leftArmRef.current.rotation.y,
-        state.armAngles[0],
+        armAngles[0],
         Math.min(1, delta * 25)
       );
     }
     if (rightArmRef.current) {
       rightArmRef.current.rotation.y = THREE.MathUtils.lerp(
         rightArmRef.current.rotation.y,
-        state.armAngles[1],
+        armAngles[1],
         Math.min(1, delta * 25)
       );
     }
@@ -76,7 +77,7 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
         />
       </mesh>
 
-      {/* Eyes (front indicators) — bigger, brighter */}
+      {/* Eyes (front indicators) */}
       <mesh position={[0.18, 0.15, CHASSIS.z - 0.02]}>
         <sphereGeometry args={[0.08, 12, 12]} />
         <meshStandardMaterial
@@ -99,10 +100,7 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
         ref={leftArmRef}
         position={[-(CHASSIS.x + ARM.x), 0, 0]}
       >
-        <mesh
-          castShadow
-          position={[0, 0, ARM.z / 2]}
-        >
+        <mesh castShadow position={[0, 0, ARM.z / 2]}>
           <boxGeometry args={[ARM.x * 2, ARM.y * 2, ARM.z * 2]} />
           <meshStandardMaterial
             color={color}
@@ -112,7 +110,7 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
             roughness={0.3}
           />
         </mesh>
-        {/* Fist — big glowing sphere */}
+        {/* Fist */}
         <mesh position={[0, 0, ARM.z + 0.1]}>
           <sphereGeometry args={[0.16, 12, 12]} />
           <meshStandardMaterial
@@ -128,10 +126,7 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
         ref={rightArmRef}
         position={[CHASSIS.x + ARM.x, 0, 0]}
       >
-        <mesh
-          castShadow
-          position={[0, 0, ARM.z / 2]}
-        >
+        <mesh castShadow position={[0, 0, ARM.z / 2]}>
           <boxGeometry args={[ARM.x * 2, ARM.y * 2, ARM.z * 2]} />
           <meshStandardMaterial
             color={color}
@@ -141,7 +136,7 @@ export function RobotMesh({ state, color, emissiveColor }: RobotMeshProps) {
             roughness={0.3}
           />
         </mesh>
-        {/* Fist — big glowing sphere */}
+        {/* Fist */}
         <mesh position={[0, 0, ARM.z + 0.1]}>
           <sphereGeometry args={[0.16, 12, 12]} />
           <meshStandardMaterial
