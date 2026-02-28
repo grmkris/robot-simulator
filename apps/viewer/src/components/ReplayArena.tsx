@@ -5,6 +5,7 @@ import { OrbitControls } from "@react-three/drei";
 import { RobotMesh } from "./RobotMesh";
 import { ArenaFloor } from "./ArenaFloor";
 import { Lights } from "./Lights";
+import { ProjectileMesh } from "./ProjectileMesh";
 
 interface ViewerRobotFrame {
   position: [number, number, number];
@@ -12,10 +13,16 @@ interface ViewerRobotFrame {
   armAngles: [number, number];
 }
 
+interface ViewerProjectileFrame {
+  position: [number, number, number];
+  ownerId: 0 | 1;
+}
+
 interface ViewerFrame {
   tick: number;
   time: number;
   robots: [ViewerRobotFrame, ViewerRobotFrame];
+  projectiles?: ViewerProjectileFrame[];
 }
 
 interface ReplayArenaProps {
@@ -31,8 +38,8 @@ function SceneContent({ frame }: ReplayArenaProps) {
         enablePan={true}
         enableZoom={true}
         maxPolarAngle={Math.PI / 2.1}
-        minDistance={2}
-        maxDistance={20}
+        minDistance={3}
+        maxDistance={35}
       />
 
       {frame && (
@@ -51,6 +58,15 @@ function SceneContent({ frame }: ReplayArenaProps) {
             color="#ff4422"
             emissiveColor="#ff6644"
           />
+
+          {/* Render projectiles in replay */}
+          {frame.projectiles?.map((proj, i) => (
+            <ProjectileMesh
+              key={`proj-${i}`}
+              position={proj.position}
+              ownerId={proj.ownerId}
+            />
+          ))}
         </>
       )}
     </>
@@ -62,7 +78,7 @@ export function ReplayArena({ frame }: ReplayArenaProps) {
     <div className="w-full h-full">
       <Canvas
         shadows
-        camera={{ position: [0, 8, 10], fov: 50 }}
+        camera={{ position: [0, 14, 18], fov: 50 }}
         style={{ background: "#0a0a1a" }}
       >
         <SceneContent frame={frame} />

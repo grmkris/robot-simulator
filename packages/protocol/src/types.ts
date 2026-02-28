@@ -37,14 +37,35 @@ export interface RobotState {
   isAlive: boolean;
 }
 
-/** An action submitted by an agent: target angles normalized to [-1, 1] */
+/** An action submitted by an agent */
 export interface AgentAction {
-  leftArmTarget: number;
-  rightArmTarget: number;
+  leftArmTarget: number; // [-1, 1] arm swing
+  rightArmTarget: number; // [-1, 1] arm swing
+  /** Forward/backward thrust in facing direction. -1 = full reverse, 1 = full forward */
+  driveForce?: number;
+  /** Yaw rotation. -1 = turn left, 1 = turn right */
+  turnRate?: number;
+  /** Fire a knockback projectile (3s cooldown) */
+  shoot?: boolean;
   /** Public thought — visible to opponent AND spectators (for mind games) */
   thought?: string;
   /** Private thought — visible to spectators ONLY (inner monologue) */
   privateThought?: string;
+}
+
+/** Projectile state snapshot */
+export interface ProjectileState {
+  id: number;
+  ownerId: AgentId;
+  position: Vec3;
+  velocity: Vec3;
+  ticksRemaining: number;
+}
+
+/** Compact projectile for viewer/replay */
+export interface ViewerProjectileState {
+  position: [number, number, number];
+  ownerId: 0 | 1;
 }
 
 /** Pre-computed tactical summary for LLM agents */
@@ -57,6 +78,18 @@ export interface TacticalContext {
   opponentSpeed: number;
   timeRemainingS: number;
   round: number;
+  /** My chassis facing angle in radians (0 = +Z axis) */
+  myFacingAngle: number;
+  /** Opponent facing angle in radians */
+  opponentFacingAngle: number;
+  /** Angle from my facing direction to opponent position (radians, + = right, - = left) */
+  angleToOpponent: number;
+  /** Seconds until I can shoot again (0 = ready) */
+  myCooldownS: number;
+  /** Seconds until opponent can shoot again (0 = ready) */
+  opponentCooldownS: number;
+  /** Number of projectiles currently heading toward me */
+  incomingProjectiles: number;
 }
 
 /** Agent thought state for viewer/replay */
@@ -70,6 +103,7 @@ export interface WorldState {
   tick: number;
   elapsed: number; // seconds since match start
   robots: [RobotState, RobotState];
+  projectiles: ProjectileState[];
   matchPhase: MatchPhase;
 }
 
@@ -100,6 +134,8 @@ export interface ViewerState {
   time: number;
   robots: [ViewerRobotState, ViewerRobotState];
   matchPhase: MatchPhase;
+  /** Active projectiles */
+  projectiles?: ViewerProjectileState[];
   /** Agent thoughts for Mind Games mode */
   thoughts?: {
     A: AgentThoughts;
@@ -133,6 +169,7 @@ export interface GameStateResponse {
   elapsed?: number;
   you?: AgentId;
   robots?: [RobotState, RobotState];
+  projectiles?: ProjectileState[];
   matchPhase?: MatchPhase;
   tactical?: TacticalContext;
   yourLastAction?: AgentAction;

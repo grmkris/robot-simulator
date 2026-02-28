@@ -22,6 +22,9 @@ export const AgentIdSchema = z.union([z.literal(0), z.literal(1)]);
 export const AgentActionSchema = z.object({
   leftArmTarget: z.number().min(-1).max(1),
   rightArmTarget: z.number().min(-1).max(1),
+  driveForce: z.number().min(-1).max(1).optional().default(0),
+  turnRate: z.number().min(-1).max(1).optional().default(0),
+  shoot: z.boolean().optional().default(false),
   thought: z.string().max(200).optional(),
   privateThought: z.string().max(200).optional(),
 });
@@ -37,6 +40,12 @@ export const TacticalContextSchema = z.object({
   opponentSpeed: z.number(),
   timeRemainingS: z.number(),
   round: z.number().int(),
+  myFacingAngle: z.number(),
+  opponentFacingAngle: z.number(),
+  angleToOpponent: z.number(),
+  myCooldownS: z.number(),
+  opponentCooldownS: z.number(),
+  incomingProjectiles: z.number().int(),
 });
 
 // ── Body / Arm / Robot State ──

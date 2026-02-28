@@ -2,7 +2,7 @@
 
 import { Grid } from "@react-three/drei";
 
-const ARENA_RADIUS = 5;
+const ARENA_RADIUS = 10;
 
 export function ArenaFloor() {
   return (
@@ -69,14 +69,14 @@ export function ArenaFloor() {
       {/* Grid for depth perception */}
       <Grid
         position={[0, 0.02, 0]}
-        args={[15, 15]}
-        cellSize={1}
+        args={[25, 25]}
+        cellSize={2}
         cellThickness={0.5}
         cellColor="#333355"
         sectionSize={ARENA_RADIUS}
         sectionThickness={1}
         sectionColor="#444477"
-        fadeDistance={12}
+        fadeDistance={22}
         fadeStrength={1}
         infiniteGrid={false}
       />

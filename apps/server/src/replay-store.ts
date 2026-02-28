@@ -17,11 +17,19 @@ export interface ReplayFrame {
   actions: [AgentAction, AgentAction];
 }
 
+/** Projectile snapshot for viewer/replay */
+export interface ViewerProjectileFrame {
+  position: [number, number, number];
+  ownerId: 0 | 1;
+}
+
 /** Pre-computed viewer state for a single tick */
 export interface ViewerFrame {
   tick: number;
   time: number;
   robots: [ViewerRobotFrame, ViewerRobotFrame];
+  /** Active projectiles at this frame */
+  projectiles?: ViewerProjectileFrame[];
   /** Agent thoughts at this frame (Mind Games) */
   thoughts?: { A: AgentThoughts; B: AgentThoughts };
   /** Decision round number */

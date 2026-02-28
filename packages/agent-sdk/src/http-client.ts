@@ -167,6 +167,7 @@ export class ArenaHttpClient {
                 tick: state.tick,
                 elapsed: state.elapsed ?? state.tick / TICK_RATE,
                 robots: state.robots,
+                projectiles: state.projectiles ?? [],
                 matchPhase: "active",
               };
 

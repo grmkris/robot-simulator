@@ -1,13 +1,11 @@
 /**
- * Match lifecycle orchestrator — HTTP Agent API Edition (v3).
+ * Match lifecycle orchestrator — HTTP Agent API Edition (v4).
  *
- * Key changes from Mind Games (v2):
- * - No more WebSocket agent connections — agents use HTTP pull API
- * - Token-based auth (UUID per agent)
- * - Agent-controlled polling rate (no server-pushed decision cadence)
- * - Inactivity timeout replaces consecutive-timeout forfeit
- * - Action persistence still works — last action holds until next submission
- * - Thoughts still work — submitted with each action
+ * v4 changes: Agent-controlled movement + knockback projectiles.
+ * - driveForce, turnRate, shoot fields in AgentAction
+ * - Shoot flag consumed after one tick (fire-once semantics)
+ * - Projectiles in game state, viewer broadcasts, and replay frames
+ * - Expanded tactical context (facing angles, cooldowns, incoming projectiles)
  */
 import { Simulation, GameLoop, initPhysics } from "@ai-arena/sim";
 import type { ActionProvider } from "@ai-arena/sim";
@@ -18,10 +16,12 @@ import type {
   WorldState,
   TacticalContext,
   GameStateResponse,
+  ViewerProjectileState,
 } from "@ai-arena/protocol";
 import {
   ARENA_RADIUS,
   TICK_RATE,
+  TICK_DURATION_S,
   MATCH_DURATION_S,
   VIEWER_BROADCAST_INTERVAL,
   AGENT_INACTIVITY_TIMEOUT_MS,
@@ -33,7 +33,7 @@ import {
   type ViewerFrame,
 } from "./replay-store.js";
 
-const NO_OP: AgentAction = { leftArmTarget: 0, rightArmTarget: 0 };
+const NO_OP: AgentAction = { leftArmTarget: 0, rightArmTarget: 0, driveForce: 0, turnRate: 0, shoot: false };
 
 interface ConnectedAgent {
   /** Bearer token for HTTP auth */
@@ -155,6 +155,7 @@ export class MatchManager {
       elapsed: state.elapsed,
       you: agentId,
       robots: state.robots,
+      projectiles: state.projectiles,
       matchPhase: state.matchPhase,
       tactical: agentId === 0 ? tactical : this.flipTactical(tactical),
       yourLastAction: agent.confirmedAction,
@@ -171,6 +172,9 @@ export class MatchManager {
     agent.confirmedAction = {
       leftArmTarget: action.leftArmTarget,
       rightArmTarget: action.rightArmTarget,
+      driveForce: action.driveForce ?? 0,
+      turnRate: action.turnRate ?? 0,
+      shoot: action.shoot ?? false,
     };
 
     // Track thoughts
@@ -184,8 +188,9 @@ export class MatchManager {
     const thoughtPreview = agent.lastThought
       ? ` 💭 "${agent.lastThought.slice(0, 50)}"`
       : "";
+    const movePreview = `drive=${(action.driveForce ?? 0).toFixed(2)} turn=${(action.turnRate ?? 0).toFixed(2)}${action.shoot ? " SHOOT" : ""}`;
     console.log(
-      `[Match] Agent ${agentId} ("${agent.name}") action: L=${action.leftArmTarget.toFixed(2)} R=${action.rightArmTarget.toFixed(2)}${thoughtPreview}`
+      `[Match] Agent ${agentId} ("${agent.name}") action: L=${action.leftArmTarget.toFixed(2)} R=${action.rightArmTarget.toFixed(2)} ${movePreview}${thoughtPreview}`
     );
   }
 
@@ -229,13 +234,19 @@ export class MatchManager {
     this.lastResult = null;
 
     // ACTION PERSISTENCE: return confirmedAction (never null)
+    // SHOOT CONSUMPTION: shoot fires once then auto-resets to prevent multi-tick firing
     const actionProvider: ActionProvider = (
       agentId: AgentId,
       _state: WorldState
     ): AgentAction => {
       const agent = this.agents.get(agentId);
       if (!agent) return { ...NO_OP };
-      return agent.confirmedAction;
+      const action = { ...agent.confirmedAction };
+      // Consume shoot flag — fire exactly once per submission
+      if (action.shoot) {
+        agent.confirmedAction.shoot = false;
+      }
+      return action;
     };
 
     this.loop = new GameLoop(this.sim, actionProvider, {
@@ -290,6 +301,7 @@ export class MatchManager {
               this.buildViewerRobot("B", r1),
             ],
             matchPhase: state.matchPhase,
+            projectiles: this.buildViewerProjectiles(state),
             ...this.buildThoughtsPayload(),
           })
         );
@@ -340,6 +352,20 @@ export class MatchManager {
   // Tactical Context
   // ══════════════════════════════════════════
 
+  /** Extract facing angle (radians from +Z) from chassis quaternion */
+  private getFacingAngle(rot: { x: number; y: number; z: number; w: number }): number {
+    const fw_x = 2 * (rot.x * rot.z + rot.w * rot.y);
+    const fw_z = 1 - 2 * (rot.x * rot.x + rot.y * rot.y);
+    return Math.atan2(fw_x, fw_z);
+  }
+
+  /** Normalize angle to [-PI, PI] */
+  private normalizeAngle(angle: number): number {
+    while (angle > Math.PI) angle -= 2 * Math.PI;
+    while (angle < -Math.PI) angle += 2 * Math.PI;
+    return angle;
+  }
+
   /** Build tactical context from robot 0's perspective */
   private buildTacticalContext(state: WorldState): TacticalContext {
     const r0 = state.robots[0];
@@ -371,6 +397,24 @@ export class MatchManager {
       r1.chassis.linvel.z
     );
 
+    // Facing angles
+    const myFacingAngle = this.getFacingAngle(r0.chassis.rotation);
+    const opponentFacingAngle = this.getFacingAngle(r1.chassis.rotation);
+
+    // Angle from my facing to opponent position (+ = right, - = left)
+    const dirToOpponent = Math.atan2(dx, dz);
+    const angleToOpponent = this.normalizeAngle(dirToOpponent - myFacingAngle);
+
+    // Cooldowns (in seconds)
+    const cooldowns = this.sim?.agentCooldowns ?? [0, 0];
+    const myCooldownS = Math.round(cooldowns[0] * TICK_DURATION_S * 100) / 100;
+    const opponentCooldownS = Math.round(cooldowns[1] * TICK_DURATION_S * 100) / 100;
+
+    // Count incoming projectiles heading toward robot 0
+    const incomingProjectiles = (state.projectiles ?? []).filter(
+      (p) => p.ownerId === 1 // fired by opponent (agent 1)
+    ).length;
+
     return {
       distanceToOpponent: Math.round(distToOpponent * 100) / 100,
       myDistFromCenter: Math.round(myDistFromCenter * 100) / 100,
@@ -381,18 +425,49 @@ export class MatchManager {
       opponentSpeed: Math.round(opponentSpeed * 100) / 100,
       timeRemainingS:
         Math.round((MATCH_DURATION_S - state.elapsed) * 10) / 10,
-      round: 0, // No more rounds in HTTP mode — kept for interface compat
+      round: 0,
+      myFacingAngle: Math.round(myFacingAngle * 100) / 100,
+      opponentFacingAngle: Math.round(opponentFacingAngle * 100) / 100,
+      angleToOpponent: Math.round(angleToOpponent * 100) / 100,
+      myCooldownS,
+      opponentCooldownS,
+      incomingProjectiles,
     };
   }
 
   /** Flip tactical context for agent 1 (swap my/opponent) */
   private flipTactical(t: TacticalContext): TacticalContext {
+    // For agent 1, recalculate angleToOpponent from their perspective
+    // The flipped angle is approximately -angleToOpponent + PI (facing opposite)
+    // But it's simpler to note that agent 1's incoming projectiles are those owned by agent 0
+    const state = this._currentState;
+    const incomingForAgent1 = (state?.projectiles ?? []).filter(
+      (p) => p.ownerId === 0 // fired by agent 0
+    ).length;
+
+    // Recompute angle to opponent from agent 1's perspective
+    const r0 = state?.robots[0];
+    const r1 = state?.robots[1];
+    let angleToOpponent1 = 0;
+    if (r0 && r1) {
+      const dx = r0.chassis.position.x - r1.chassis.position.x;
+      const dz = r0.chassis.position.z - r1.chassis.position.z;
+      const dirToOpponent = Math.atan2(dx, dz);
+      angleToOpponent1 = this.normalizeAngle(dirToOpponent - t.opponentFacingAngle);
+    }
+
     return {
       ...t,
       myDistFromCenter: t.opponentDistFromCenter,
       opponentDistFromCenter: t.myDistFromCenter,
       mySpeed: t.opponentSpeed,
       opponentSpeed: t.mySpeed,
+      myFacingAngle: t.opponentFacingAngle,
+      opponentFacingAngle: t.myFacingAngle,
+      angleToOpponent: Math.round(angleToOpponent1 * 100) / 100,
+      myCooldownS: t.opponentCooldownS,
+      opponentCooldownS: t.myCooldownS,
+      incomingProjectiles: incomingForAgent1,
     };
   }
 
@@ -419,6 +494,13 @@ export class MatchManager {
       ],
       armAngles: [r.leftArm.currentAngle, r.rightArm.currentAngle],
     };
+  }
+
+  private buildViewerProjectiles(state: WorldState): ViewerProjectileState[] {
+    return (state.projectiles ?? []).map((p) => ({
+      position: [p.position.x, p.position.y, p.position.z] as [number, number, number],
+      ownerId: p.ownerId,
+    }));
   }
 
   private buildThoughtsPayload(): object {
@@ -483,6 +565,7 @@ export class MatchManager {
           armAngles: [r1.leftArm.currentAngle, r1.rightArm.currentAngle],
         },
       ],
+      projectiles: this.buildViewerProjectiles(state),
       thoughts: {
         A: {
           thought: a0?.lastThought ?? null,
@@ -509,6 +592,7 @@ export class MatchManager {
         this.buildViewerRobot("B", r1),
       ],
       matchPhase: state.matchPhase,
+      projectiles: this.buildViewerProjectiles(state),
       ...this.buildThoughtsPayload(),
     });
 

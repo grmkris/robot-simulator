@@ -6,10 +6,12 @@ import { RobotMesh } from "./RobotMesh";
 import { ArenaFloor } from "./ArenaFloor";
 import { Lights } from "./Lights";
 import { CameraRig } from "./CameraRig";
+import { ProjectileMesh } from "./ProjectileMesh";
 import { useArenaStore } from "@/lib/store";
 
 function SceneContent() {
   const robots = useArenaStore((s) => s.robots);
+  const projectiles = useArenaStore((s) => s.projectiles);
 
   return (
     <>
@@ -20,8 +22,8 @@ function SceneContent() {
         enablePan={true}
         enableZoom={true}
         maxPolarAngle={Math.PI / 2.1}
-        minDistance={2}
-        maxDistance={20}
+        minDistance={3}
+        maxDistance={35}
       />
 
       {robots && (
@@ -42,6 +44,15 @@ function SceneContent() {
           />
         </>
       )}
+
+      {/* Render projectiles */}
+      {projectiles.map((proj, i) => (
+        <ProjectileMesh
+          key={`proj-${i}`}
+          position={proj.position}
+          ownerId={proj.ownerId}
+        />
+      ))}
     </>
   );
 }
@@ -51,7 +62,7 @@ export function Arena3D() {
     <div className="w-full h-full">
       <Canvas
         shadows
-        camera={{ position: [0, 8, 10], fov: 50 }}
+        camera={{ position: [0, 14, 18], fov: 50 }}
         style={{ background: "#0a0a1a" }}
       >
         <SceneContent />

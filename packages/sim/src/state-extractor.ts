@@ -1,5 +1,6 @@
 import type RAPIER from "@dimforge/rapier3d-compat";
 import type { Robot } from "./robot-factory.js";
+import type { ProjectileSnapshot } from "./simulation.js";
 import type {
   RobotState,
   BodyState,
@@ -7,8 +8,9 @@ import type {
   WorldState,
   MatchPhase,
   AgentAction,
+  ProjectileState,
 } from "@ai-arena/protocol";
-import { TICK_DURATION_S, RING_OUT_Y_THRESHOLD } from "@ai-arena/protocol";
+import { RING_OUT_Y_THRESHOLD, TICK_DURATION_S } from "@ai-arena/protocol";
 
 /** Extract serializable body state from a Rapier rigid body */
 export function extractBodyState(body: RAPIER.RigidBody): BodyState {
@@ -26,7 +28,6 @@ export function extractBodyState(body: RAPIER.RigidBody): BodyState {
 
 /**
  * Compute the relative Y-axis rotation angle between two rigid bodies.
- * Used to derive the revolute joint angle since Rapier compat doesn't expose .angle().
  */
 function computeRelativeYAngle(
   parentBody: RAPIER.RigidBody,
@@ -35,8 +36,6 @@ function computeRelativeYAngle(
   const pRot = parentBody.rotation();
   const cRot = childBody.rotation();
 
-  // Extract yaw (Y-axis rotation) from each quaternion
-  // yaw = atan2(2*(w*y + x*z), 1 - 2*(y*y + z*z)) — simplified for Y-axis
   const pYaw = Math.atan2(
     2 * (pRot.w * pRot.y + pRot.x * pRot.z),
     1 - 2 * (pRot.y * pRot.y + pRot.z * pRot.z)
@@ -46,13 +45,9 @@ function computeRelativeYAngle(
     1 - 2 * (cRot.y * cRot.y + cRot.z * cRot.z)
   );
 
-  // Relative angle
   let angle = cYaw - pYaw;
-
-  // Normalize to [-PI, PI]
   while (angle > Math.PI) angle -= 2 * Math.PI;
   while (angle < -Math.PI) angle += 2 * Math.PI;
-
   return angle;
 }
 
@@ -100,7 +95,8 @@ export function extractWorldState(
   tick: number,
   robots: [Robot, Robot],
   actions: [AgentAction, AgentAction],
-  matchPhase: MatchPhase
+  matchPhase: MatchPhase,
+  projectileSnapshots?: ProjectileSnapshot[]
 ): WorldState {
   return {
     tick,
@@ -109,6 +105,15 @@ export function extractWorldState(
       extractRobotState(robots[0], actions[0]),
       extractRobotState(robots[1], actions[1]),
     ],
+    projectiles: (projectileSnapshots ?? []).map(
+      (p): ProjectileState => ({
+        id: p.id,
+        ownerId: p.ownerId,
+        position: p.position,
+        velocity: p.velocity,
+        ticksRemaining: p.ticksRemaining,
+      })
+    ),
     matchPhase,
   };
 }

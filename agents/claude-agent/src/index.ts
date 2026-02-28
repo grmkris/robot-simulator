@@ -4,8 +4,7 @@
  * Uses Claude Haiku 4.5 for fast (~200ms) strategic decisions with
  * public thoughts (mind games) and private strategy (inner monologue).
  *
- * The agent receives tactical context and opponent's last public thought,
- * then decides arm positions AND what to say (bluffs, taunts, strategy).
+ * v4: Now controls movement (drive + turn) and shooting!
  */
 import Anthropic from "@anthropic-ai/sdk";
 import type { AgentAction, AgentId, WorldState } from "@ai-arena/protocol";
@@ -21,50 +20,62 @@ const anthropic = new Anthropic({
   authToken: auth?.authToken ?? undefined,
 });
 
-const SYSTEM_PROMPT = `You are a robot fighter in a sumo-style arena. Two robots charge at each other automatically — you only control your two arms.
+const SYSTEM_PROMPT = `You are a robot fighter in a sumo-style arena with knockback projectiles.
 
-CONTROLS:
-- leftArmTarget: number from -1 (pulled back) to 1 (swung forward)
-- rightArmTarget: number from -1 (pulled back) to 1 (swung forward)
+CONTROLS (all values -1 to 1 unless noted):
+- left: left arm target (-1=pulled back, 1=swung forward)
+- right: right arm target (-1=pulled back, 1=swung forward)
+- drive: forward/backward thrust (-1=full reverse, 1=full forward) in YOUR facing direction
+- turn: yaw rotation (-1=turn left, 1=turn right)
+- shoot: true/false — fire a knockback projectile (3 second cooldown)
 
 ARENA:
-- Circular arena, radius 5m. Fall off = you lose.
-- Robots auto-charge toward each other. You can't move — only swing arms.
-- Arms are like battering rams. Swing forward to push opponent, pull back to wind up.
+- Circular arena, radius 10m. Fall off = you lose.
+- YOU control movement — there is no auto-charge. You must drive and turn yourself.
+- Arms are battering rams for close combat. Swing to push opponent off the edge.
+- Projectiles don't damage — they PUSH the target backward (knockback). Great for edge kills!
+- Projectile travels at 12 m/s in your facing direction. 2s lifetime, 3s cooldown between shots.
 
 STRATEGY TIPS:
-- Alternating arms (one forward, one back) creates a windmill attack
-- Both arms forward = maximum push (but no follow-up)
-- Both arms back = wind up for a big hit (risky if opponent hits you)
-- When near the edge, be careful — getting pushed is death
-- Timing matters more than raw force
+- Face your opponent (use turn), then shoot to push them toward the edge
+- When opponent is near the edge, charge in with arms or shoot to finish them
+- Stay near the center — it's the safest position
+- Dodge incoming projectiles by strafing (turn + drive sideways)
+- At close range, windmill arms (alternate left/right) for maximum push
+- Shooting at range when aligned is very effective
+- If your cooldown is 0, you can shoot again
+- Watch your distance from center — getting too far out is dangerous
 
 MIND GAMES:
-- Your "thought" is visible to your opponent! Use it to:
-  - Bluff: say you're going left when you go right
-  - Intimidate: trash talk to distract them
-  - Deceive: pretend to be scared when you're setting up an attack
-  - Be honest sometimes — so they can't tell when you're lying
-- Your "privateThought" is your real strategy (only spectators see it)
+- Your "thought" is visible to your opponent! Use it to bluff, intimidate, or deceive
+- Your "private" thought is your real strategy (only spectators see it)
 
 Respond with ONLY a JSON object (no markdown, no explanation):
 {
   "left": <number -1 to 1>,
   "right": <number -1 to 1>,
-  "thought": "<what you say to opponent — they can see this!>",
-  "private": "<your real strategy — only spectators see this>"
+  "drive": <number -1 to 1>,
+  "turn": <number -1 to 1>,
+  "shoot": <true/false>,
+  "thought": "<what opponent sees>",
+  "private": "<your real strategy>"
 }`;
 
 function formatGameState(context: DecisionContext): string {
   const t = context.tactical;
   const parts = [
-    `Round ${context.round} | ${t.timeRemainingS}s remaining`,
+    `Time remaining: ${t.timeRemainingS}s`,
     `Distance to opponent: ${t.distanceToOpponent}m`,
-    `My distance from center: ${t.myDistFromCenter}m (arena radius: 5m)`,
+    `My distance from center: ${t.myDistFromCenter}m (arena radius: 10m)`,
     `Opponent distance from center: ${t.opponentDistFromCenter}m`,
     `Closing speed: ${t.closingSpeed}m/s (positive = approaching)`,
     `My speed: ${t.mySpeed}m/s | Opponent speed: ${t.opponentSpeed}m/s`,
-    `My current arms: L=${context.currentAction.leftArmTarget.toFixed(2)} R=${context.currentAction.rightArmTarget.toFixed(2)}`,
+    `My facing angle: ${t.myFacingAngle.toFixed(2)} rad`,
+    `Angle to opponent: ${t.angleToOpponent.toFixed(2)} rad (+=right, -=left, 0=directly ahead)`,
+    `My shoot cooldown: ${t.myCooldownS}s (0 = ready)`,
+    `Opponent shoot cooldown: ${t.opponentCooldownS}s`,
+    `Incoming projectiles: ${t.incomingProjectiles}`,
+    `My current: L=${context.currentAction.leftArmTarget.toFixed(2)} R=${context.currentAction.rightArmTarget.toFixed(2)} drive=${(context.currentAction.driveForce ?? 0).toFixed(2)} turn=${(context.currentAction.turnRate ?? 0).toFixed(2)}`,
   ];
 
   if (context.opponentThought) {
@@ -86,14 +97,20 @@ function parseResponse(text: string): AgentAction {
     return {
       leftArmTarget: Math.max(-1, Math.min(1, Number(parsed.left) || 0)),
       rightArmTarget: Math.max(-1, Math.min(1, Number(parsed.right) || 0)),
+      driveForce: Math.max(-1, Math.min(1, Number(parsed.drive) || 0)),
+      turnRate: Math.max(-1, Math.min(1, Number(parsed.turn) || 0)),
+      shoot: Boolean(parsed.shoot),
       thought: typeof parsed.thought === "string" ? parsed.thought.slice(0, 200) : undefined,
       privateThought: typeof parsed.private === "string" ? parsed.private.slice(0, 200) : undefined,
     };
   } catch {
-    // Fallback: aggressive stance
+    // Fallback: drive forward and shoot
     return {
       leftArmTarget: 0.5,
       rightArmTarget: -0.5,
+      driveForce: 0.5,
+      turnRate: 0,
+      shoot: true,
       thought: "...",
       privateThought: "Failed to parse Claude response, using fallback",
     };
@@ -108,11 +125,30 @@ export async function claudeBrain(
   state: WorldState,
   context?: DecisionContext
 ): Promise<AgentAction> {
-  // If no decision context (legacy tick mode), use simple fallback
+  // If no decision context (legacy tick mode), use simple approach
   if (!context) {
+    const me = state.robots[agentId];
+    const opp = state.robots[agentId === 0 ? 1 : 0];
+    if (!me || !opp) return { leftArmTarget: 0, rightArmTarget: 0 };
+
+    // Simple fallback: drive toward opponent
+    const dx = opp.chassis.position.x - me.chassis.position.x;
+    const dz = opp.chassis.position.z - me.chassis.position.z;
+    const rot = me.chassis.rotation;
+    const fw_x = 2 * (rot.x * rot.z + rot.w * rot.y);
+    const fw_z = 1 - 2 * (rot.x * rot.x + rot.y * rot.y);
+    const myFacing = Math.atan2(fw_x, fw_z);
+    const dirTo = Math.atan2(dx, dz);
+    let diff = dirTo - myFacing;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+
     return {
       leftArmTarget: Math.sin(state.tick * 0.1),
       rightArmTarget: Math.sin(state.tick * 0.1 + Math.PI),
+      driveForce: 0.7,
+      turnRate: Math.max(-1, Math.min(1, diff * 3)),
+      shoot: Math.abs(diff) < 0.3,
     };
   }
 
@@ -134,6 +170,9 @@ export async function claudeBrain(
       return {
         leftArmTarget: 0,
         rightArmTarget: 0,
+        driveForce: 0.5,
+        turnRate: 0,
+        shoot: true,
         thought: "...",
         privateThought: "No text in Claude response",
       };
@@ -146,6 +185,9 @@ export async function claudeBrain(
     return {
       leftArmTarget: Math.random() * 2 - 1,
       rightArmTarget: Math.random() * 2 - 1,
+      driveForce: 0.5,
+      turnRate: 0,
+      shoot: true,
       thought: "Technical difficulties...",
       privateThought: `API error: ${err instanceof Error ? err.message : "unknown"}`,
     };

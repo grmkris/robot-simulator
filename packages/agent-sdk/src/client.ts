@@ -155,6 +155,7 @@ export class ArenaClient {
           tick,
           elapsed: tick / TICK_RATE,
           robots,
+          projectiles: [],
           matchPhase,
         };
 
@@ -196,6 +197,7 @@ export class ArenaClient {
           tick,
           elapsed: tick / TICK_RATE,
           robots,
+          projectiles: [],
           matchPhase,
         };
 

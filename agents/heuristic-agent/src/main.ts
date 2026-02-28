@@ -11,7 +11,7 @@ const client = new ArenaHttpClient({
   serverUrl: SERVER_URL,
   name: "HeuristicBot",
   brain: heuristicAgent,
-  pollIntervalMs: 500,
+  pollIntervalMs: 100, // fast polling for responsive physics control
   onMatchEnd: (winner, reason) => {
     console.log(`[HeuristicBot] Match result: winner=${winner ?? "DRAW"} reason=${reason}`);
     setTimeout(() => process.exit(0), 500);

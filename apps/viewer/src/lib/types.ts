@@ -7,6 +7,12 @@ export interface ViewerRobotState {
   armAngles: [number, number]; // [left, right]
 }
 
+/** Projectile state for viewer rendering */
+export interface ViewerProjectileState {
+  position: [number, number, number];
+  ownerId: 0 | 1;
+}
+
 /** Agent thoughts for Mind Games mode */
 export interface AgentThoughts {
   thought: string | null;
@@ -19,6 +25,8 @@ export interface ViewerStateMessage {
   time: number;
   robots: [ViewerRobotState, ViewerRobotState];
   matchPhase: "waiting" | "countdown" | "active" | "finished";
+  /** Active projectiles */
+  projectiles?: ViewerProjectileState[];
   /** Agent thoughts (Mind Games) */
   thoughts?: {
     A: AgentThoughts;

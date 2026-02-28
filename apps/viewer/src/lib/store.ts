@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   ViewerRobotState,
+  ViewerProjectileState,
   ViewerStateMessage,
   MatchEndMessage,
   AgentThoughts,
@@ -23,6 +24,9 @@ interface ArenaStore {
 
   // Interpolation: previous + current frame for lerping
   prevRobots: [ViewerRobotState, ViewerRobotState] | null;
+
+  // Projectiles
+  projectiles: ViewerProjectileState[];
 
   // Mind Games
   thoughts: { A: AgentThoughts; B: AgentThoughts } | null;
@@ -53,6 +57,7 @@ export const useArenaStore = create<ArenaStore>((set, get) => ({
   winner: null,
   winReason: null,
   prevRobots: null,
+  projectiles: [],
   thoughts: null,
   round: 0,
   agentNames: { A: "Robot A", B: "Robot B" },
@@ -64,6 +69,7 @@ export const useArenaStore = create<ArenaStore>((set, get) => ({
       matchPhase: msg.matchPhase,
       prevRobots: state.robots,
       robots: msg.robots,
+      projectiles: msg.projectiles ?? [],
       thoughts: msg.thoughts ?? state.thoughts,
       round: msg.round ?? state.round,
       agentNames: msg.agentNames ?? state.agentNames,
@@ -85,6 +91,7 @@ export const useArenaStore = create<ArenaStore>((set, get) => ({
       winner: null,
       winReason: null,
       prevRobots: null,
+      projectiles: [],
       thoughts: null,
       round: 0,
       agentNames: { A: "Robot A", B: "Robot B" },

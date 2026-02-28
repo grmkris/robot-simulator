@@ -11,7 +11,7 @@ const client = new ArenaHttpClient({
   serverUrl: SERVER_URL,
   name: "RandomBot",
   brain: randomAgent,
-  pollIntervalMs: 500,
+  pollIntervalMs: 100, // fast polling for responsive physics control
   onMatchEnd: (winner, reason) => {
     console.log(`[RandomBot] Match result: winner=${winner ?? "DRAW"} reason=${reason}`);
     setTimeout(() => process.exit(0), 500);
