@@ -8,18 +8,21 @@ import type { ServerViewerMessage } from "@/lib/types";
  * Connects to the arena server's spectator WebSocket.
  * Automatically reconnects on disconnect.
  */
-export function useMatchSocket(serverUrl: string) {
+export function useMatchSocket(serverUrl: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { setConnected, updateState, setMatchEnd, reset } = useArenaStore();
 
   useEffect(() => {
+    if (!serverUrl) return; // Wait until URL is resolved
+
+    const url = serverUrl; // Capture for closure narrowing
     let unmounted = false;
 
     function connect() {
       if (unmounted) return;
 
-      const ws = new WebSocket(serverUrl);
+      const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
