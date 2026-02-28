@@ -20,13 +20,8 @@ export default function ReplaysPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Get server base URL from runtime config, then fetch replays
-    fetch("/api/config")
-      .then((res) => res.json())
-      .then((config) => {
-        const baseUrl: string = config.serverBaseUrl || "http://localhost:3000";
-        return fetch(`${baseUrl}/api/replays`);
-      })
+    // Fetch via viewer's proxy API route (avoids CORS)
+    fetch("/api/replays")
       .then((res) => res.json())
       .then((data) => {
         setReplays(data.summaries || []);

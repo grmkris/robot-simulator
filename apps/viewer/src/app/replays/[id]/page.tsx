@@ -45,14 +45,9 @@ export default function ReplayPlayerPage() {
   const lastTimeRef = useRef<number>(0);
   const accumulatorRef = useRef<number>(0);
 
-  // Load replay data from the game server via runtime config
+  // Load replay data via viewer's proxy API route (avoids CORS)
   useEffect(() => {
-    fetch("/api/config")
-      .then((res) => res.json())
-      .then((config) => {
-        const baseUrl: string = config.serverBaseUrl || "http://localhost:3000";
-        return fetch(`${baseUrl}/api/replays/${id}`);
-      })
+    fetch(`/api/replays/${id}`)
       .then((res) => {
         if (!res.ok) throw new Error("Not found");
         return res.json();
