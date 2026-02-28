@@ -9,6 +9,17 @@
         "typescript": "^5.9.3",
       },
     },
+    "agents/aggressive-agent": {
+      "name": "@ai-arena/aggressive-agent",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-arena/agent-sdk": "workspace:*",
+        "@ai-arena/protocol": "workspace:*",
+      },
+      "devDependencies": {
+        "bun-types": "latest",
+      },
+    },
     "agents/heuristic-agent": {
       "name": "@ai-arena/heuristic-agent",
       "version": "0.1.0",
@@ -107,6 +118,8 @@
   },
   "packages": {
     "@ai-arena/agent-sdk": ["@ai-arena/agent-sdk@workspace:packages/agent-sdk"],
+
+    "@ai-arena/aggressive-agent": ["@ai-arena/aggressive-agent@workspace:agents/aggressive-agent"],
 
     "@ai-arena/heuristic-agent": ["@ai-arena/heuristic-agent@workspace:agents/heuristic-agent"],
 

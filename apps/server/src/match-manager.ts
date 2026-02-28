@@ -19,7 +19,11 @@ import {
   VIEWER_BROADCAST_INTERVAL,
 } from "@ai-arena/protocol";
 import type { WSContext } from "hono/ws";
-import { saveReplay, generateMatchId } from "./replay-store.js";
+import {
+  saveReplay,
+  generateMatchId,
+  type ViewerFrame,
+} from "./replay-store.js";
 
 const NO_OP: AgentAction = { leftArmTarget: 0, rightArmTarget: 0 };
 
@@ -37,6 +41,7 @@ export class MatchManager {
   private _currentState: WorldState | null = null;
   private spectators = new Set<WSContext>();
   private ticksSinceLastBroadcast = 0;
+  private viewerFrameHistory: ViewerFrame[] = [];
 
   get currentState(): WorldState | null {
     return this._currentState;
@@ -81,6 +86,7 @@ export class MatchManager {
     await initPhysics();
     this.sim = new Simulation();
     await this.sim.init();
+    this.viewerFrameHistory = [];
 
     const actionProvider: ActionProvider = (
       agentId: AgentId,
@@ -97,6 +103,9 @@ export class MatchManager {
       onTick: (state) => {
         this._currentState = state;
         this.broadcastToAgents(state);
+
+        // Capture viewer frame for replay
+        this.captureViewerFrame(state);
 
         // Throttle viewer broadcasts
         this.ticksSinceLastBroadcast++;
@@ -169,6 +178,46 @@ export class MatchManager {
   }
 
   // ── Internal ──
+
+  /** Capture a viewer frame for replay storage */
+  private captureViewerFrame(state: WorldState): void {
+    const r0 = state.robots[0];
+    const r1 = state.robots[1];
+    this.viewerFrameHistory.push({
+      tick: state.tick,
+      time: state.elapsed,
+      robots: [
+        {
+          position: [
+            r0.chassis.position.x,
+            r0.chassis.position.y,
+            r0.chassis.position.z,
+          ],
+          rotation: [
+            r0.chassis.rotation.x,
+            r0.chassis.rotation.y,
+            r0.chassis.rotation.z,
+            r0.chassis.rotation.w,
+          ],
+          armAngles: [r0.leftArm.currentAngle, r0.rightArm.currentAngle],
+        },
+        {
+          position: [
+            r1.chassis.position.x,
+            r1.chassis.position.y,
+            r1.chassis.position.z,
+          ],
+          rotation: [
+            r1.chassis.rotation.x,
+            r1.chassis.rotation.y,
+            r1.chassis.rotation.z,
+            r1.chassis.rotation.w,
+          ],
+          armAngles: [r1.leftArm.currentAngle, r1.rightArm.currentAngle],
+        },
+      ],
+    });
+  }
 
   private broadcastToAgents(state: WorldState): void {
     for (const [id, agent] of this.agents) {
@@ -274,12 +323,15 @@ export class MatchManager {
       }
     }
 
-    // Save replay
+    // Save replay with viewer frames
     if (this.sim) {
       const matchId = generateMatchId();
-      saveReplay(matchId, result, this.sim.history).catch((err) =>
-        console.error("[Replay] Failed to save:", err)
-      );
+      saveReplay(
+        matchId,
+        result,
+        this.sim.history,
+        this.viewerFrameHistory
+      ).catch((err) => console.error("[Replay] Failed to save:", err));
     }
 
     // Cleanup
@@ -289,6 +341,7 @@ export class MatchManager {
     this.agents.clear();
     this._currentState = null;
     this.ticksSinceLastBroadcast = 0;
+    this.viewerFrameHistory = [];
 
     console.log("[Match] Reset. Waiting for new agents...");
   }

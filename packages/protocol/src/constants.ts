@@ -17,14 +17,14 @@ export const ARM_MASS = 1.5; // kg — heavier arms = more punch impact
 export const ARM_ANGLE_MIN = -Math.PI / 2.5; // -72 degrees — wider swing
 export const ARM_ANGLE_MAX = Math.PI / 2.5; // +72 degrees — wider swing
 export const ARM_MOTOR_STIFFNESS = 120; // Nm/rad — snappy responsive arms
-export const ARM_MOTOR_DAMPING = 6; // Nm*s/rad — less damping = faster swings
+export const ARM_MOTOR_DAMPING = 4; // Nm*s/rad — very snappy swings
 
 // ── Chassis Drive (auto-approach toward opponent) ──
-export const CHASSIS_DRIVE_FORCE = 25; // Newtons — aggressive push
-export const CHASSIS_MAX_SPEED = 4; // m/s — fast closing speed
+export const CHASSIS_DRIVE_FORCE = 35; // Newtons — very aggressive charge
+export const CHASSIS_MAX_SPEED = 5; // m/s — fast closing speed
 
 // ── Match Rules ──
-export const MATCH_DURATION_S = 60;
+export const MATCH_DURATION_S = 45; // Shorter, tighter matches
 export const MATCH_DURATION_TICKS = MATCH_DURATION_S * TICK_RATE;
 export const RING_OUT_Y_THRESHOLD = -2;
 export const RING_OUT_DISTANCE_MARGIN = 1; // beyond arena radius
@@ -32,5 +32,5 @@ export const RING_OUT_DISTANCE_MARGIN = 1; // beyond arena radius
 // ── Protocol ──
 export const PROTOCOL_VERSION = 1;
 export const MAX_AGENTS = 2;
-export const VIEWER_BROADCAST_RATE = 20; // Hz
+export const VIEWER_BROADCAST_RATE = 30; // Hz — smoother viewer updates
 export const VIEWER_BROADCAST_INTERVAL = Math.floor(TICK_RATE / VIEWER_BROADCAST_RATE);

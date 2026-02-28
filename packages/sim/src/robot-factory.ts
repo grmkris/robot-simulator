@@ -48,11 +48,11 @@ export class RobotFactory {
     )
       .setDensity(CHASSIS_MASS / chassisVol)
       .setFriction(0.8)
-      .setRestitution(0.3); // Some bounce on collision for drama
+      .setRestitution(0.5); // Bouncy collisions — robots ricochet on contact
     this.world.createCollider(chassisCollider, chassis);
 
     // Moderate damping — fast movement, controlled spinning
-    chassis.setLinearDamping(1.0);
+    chassis.setLinearDamping(0.8);  // Low damping = more momentum after hits
     chassis.setAngularDamping(2.0);
 
     // ── Left Arm ──
@@ -118,7 +118,7 @@ export class RobotFactory {
     )
       .setDensity(ARM_MASS / armVol)
       .setFriction(0.6)
-      .setRestitution(0.4); // Arms bounce off on impact
+      .setRestitution(0.6); // Arm hits send opponents sliding
     this.world.createCollider(collider, body);
 
     return body;
