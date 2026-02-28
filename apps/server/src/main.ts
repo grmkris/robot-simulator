@@ -11,7 +11,7 @@ import { websocket } from "hono/bun";
 import { initPhysics } from "@ai-arena/sim";
 import { MatchManager } from "./match-manager.js";
 import { createWSRoutes } from "./ws-handler.js";
-import { loadReplay, listReplays } from "./replay-store.js";
+import { loadReplay, listReplays, listReplaySummaries } from "./replay-store.js";
 
 // Initialize Rapier WASM at startup
 console.log("[Server] Initializing Rapier3D WASM...");
@@ -47,8 +47,10 @@ app.get("/api/match/state", (c) => {
 
 // Replay endpoints
 app.get("/api/replays", async (c) => {
-  const ids = await listReplays();
-  return c.json({ replays: ids });
+  const summaries = await listReplaySummaries();
+  // Also include legacy format for compatibility
+  const ids = summaries.map((s) => s.matchId);
+  return c.json({ replays: ids, summaries });
 });
 
 app.get("/api/replays/:id", async (c) => {

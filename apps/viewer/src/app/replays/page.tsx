@@ -3,30 +3,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-interface ReplayInfo {
-  id: string;
-  date: string;
-  time: string;
-}
-
-function parseReplayId(id: string): ReplayInfo {
-  // Format: match_YYYYMMDD_HHMMSS_xxxx
-  const parts = id.split("_");
-  const dateStr = parts[1] || "";
-  const timeStr = parts[2] || "";
-
-  const date = dateStr
-    ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
-    : "Unknown";
-  const time = timeStr
-    ? `${timeStr.slice(0, 2)}:${timeStr.slice(2, 4)}:${timeStr.slice(4, 6)}`
-    : "Unknown";
-
-  return { id, date, time };
+interface ReplaySummary {
+  matchId: string;
+  timestamp: string;
+  result: { winner: number | null; reason: string; finalTick: number };
+  frameCount: number;
 }
 
 export default function ReplaysPage() {
-  const [replays, setReplays] = useState<ReplayInfo[]>([]);
+  const [summaries, setSummaries] = useState<ReplaySummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,11 +19,10 @@ export default function ReplaysPage() {
     fetch("/api/replays")
       .then((res) => res.json())
       .then((data) => {
-        const parsed = (data.replays || []).map(parseReplayId).reverse();
-        setReplays(parsed);
+        setSummaries(data.summaries || []);
         setLoading(false);
       })
-      .catch((err) => {
+      .catch(() => {
         setError("Failed to load replays");
         setLoading(false);
       });
@@ -52,7 +36,7 @@ export default function ReplaysPage() {
           <div>
             <h1 className="text-3xl font-bold font-mono">Match History</h1>
             <p className="text-gray-400 text-sm mt-1">
-              View past AI Actuator Arena matches
+              Watch past AI Actuator Arena matches
             </p>
           </div>
           <Link
@@ -78,7 +62,7 @@ export default function ReplaysPage() {
         )}
 
         {/* Empty state */}
-        {!loading && !error && replays.length === 0 && (
+        {!loading && !error && summaries.length === 0 && (
           <div className="text-center py-12 border border-gray-800 rounded-lg">
             <div className="text-gray-500 font-mono text-lg mb-2">
               No matches yet
@@ -91,31 +75,46 @@ export default function ReplaysPage() {
 
         {/* Replay list */}
         <div className="space-y-3">
-          {replays.map((replay) => (
-            <div
-              key={replay.id}
-              className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 hover:border-blue-500/50 transition-colors"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-mono text-sm text-white">
-                    {replay.id}
+          {summaries.map((s) => {
+            const date = new Date(s.timestamp);
+            const dateStr = date.toLocaleDateString();
+            const timeStr = date.toLocaleTimeString();
+            const durationSec = (s.result.finalTick / 60).toFixed(1);
+
+            return (
+              <Link
+                key={s.matchId}
+                href={`/replays/${s.matchId}`}
+                className="block bg-gray-900/50 border border-gray-800 rounded-lg p-4 hover:border-blue-500/50 hover:bg-gray-900/80 transition-colors group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-sm text-white">
+                        {s.result.winner !== null ? (
+                          <span className={s.result.winner === 0 ? "text-blue-400" : "text-red-400"}>
+                            Robot {s.result.winner === 0 ? "A" : "B"} wins
+                          </span>
+                        ) : (
+                          <span className="text-yellow-400">Draw</span>
+                        )}
+                      </span>
+                      <span className="text-gray-600 text-xs font-mono uppercase">
+                        {s.result.reason.replace("_", " ")}
+                      </span>
+                    </div>
+                    <div className="text-gray-500 text-xs mt-1 flex gap-4">
+                      <span>{dateStr} {timeStr}</span>
+                      <span>{durationSec}s ({s.result.finalTick} ticks)</span>
+                    </div>
                   </div>
-                  <div className="text-gray-500 text-xs mt-1">
-                    {replay.date} at {replay.time} UTC
+                  <div className="text-blue-400 font-mono text-sm opacity-0 group-hover:opacity-100 transition-opacity">
+                    PLAY
                   </div>
                 </div>
-                <a
-                  href={`/api/replays/${replay.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded text-xs font-mono transition-colors"
-                >
-                  VIEW JSON
-                </a>
-              </div>
-            </div>
-          ))}
+              </Link>
+            );
+          })}
         </div>
       </div>
     </main>
