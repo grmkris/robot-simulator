@@ -21,6 +21,9 @@ COPY apps/server/ apps/server/
 COPY agents/ agents/
 COPY tsconfig.json ./
 
+# Ensure data directory exists (Railway volume mounts at /data)
+RUN mkdir -p /data
+
 # Expose port (Railway sets PORT env var)
 EXPOSE ${PORT:-3000}
 

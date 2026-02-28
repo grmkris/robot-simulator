@@ -3,10 +3,11 @@
  *
  * Uses Bun's built-in SQLite for persistent storage.
  * On Railway, mount a persistent volume at /data to survive redeploys.
+ * Lazy initialization to avoid crashing if the volume isn't ready yet.
  */
 import { Database } from "bun:sqlite";
 import type { AgentAction, MatchResult } from "@ai-arena/protocol";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 export interface ReplayFrame {
@@ -44,55 +45,45 @@ export interface ReplaySummary {
   frameCount: number;
 }
 
-// ── Database setup ──
+// ── Lazy Database initialization ──
 
 const DB_PATH = process.env.DB_PATH || "./data/arena.db";
 
-// Ensure directory exists
-mkdirSync(dirname(DB_PATH), { recursive: true });
+let db: Database | null = null;
 
-const db = new Database(DB_PATH);
+function getDb(): Database {
+  if (db) return db;
 
-// Enable WAL mode for better concurrent read performance
-db.run("PRAGMA journal_mode = WAL");
+  try {
+    const dir = dirname(DB_PATH);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
 
-// Create table if not exists
-db.run(`
-  CREATE TABLE IF NOT EXISTS replays (
-    match_id TEXT PRIMARY KEY,
-    timestamp TEXT NOT NULL,
-    winner INTEGER,
-    reason TEXT NOT NULL,
-    final_tick INTEGER NOT NULL,
-    frame_count INTEGER NOT NULL,
-    frames_json TEXT NOT NULL,
-    viewer_frames_json TEXT NOT NULL
-  )
-`);
+    db = new Database(DB_PATH);
+    db.run("PRAGMA journal_mode = WAL");
 
-// Prepared statements for performance
-const insertStmt = db.prepare(`
-  INSERT OR REPLACE INTO replays
-    (match_id, timestamp, winner, reason, final_tick, frame_count, frames_json, viewer_frames_json)
-  VALUES
-    ($matchId, $timestamp, $winner, $reason, $finalTick, $frameCount, $framesJson, $viewerFramesJson)
-`);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS replays (
+        match_id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        winner INTEGER,
+        reason TEXT NOT NULL,
+        final_tick INTEGER NOT NULL,
+        frame_count INTEGER NOT NULL,
+        frames_json TEXT NOT NULL,
+        viewer_frames_json TEXT NOT NULL
+      )
+    `);
 
-const selectOneStmt = db.prepare(`
-  SELECT * FROM replays WHERE match_id = $matchId
-`);
+    console.log(`[Replay] SQLite database initialized at ${DB_PATH}`);
+  } catch (err) {
+    console.error(`[Replay] Failed to initialize SQLite at ${DB_PATH}:`, err);
+    throw err;
+  }
 
-const selectSummariesStmt = db.prepare(`
-  SELECT match_id, timestamp, winner, reason, final_tick, frame_count
-  FROM replays
-  ORDER BY timestamp DESC
-`);
-
-const selectIdsStmt = db.prepare(`
-  SELECT match_id FROM replays ORDER BY timestamp DESC
-`);
-
-console.log(`[Replay] SQLite database initialized at ${DB_PATH}`);
+  return db;
+}
 
 // ── Public API ──
 
@@ -105,6 +96,7 @@ export async function saveReplay(
   history: ReadonlyArray<{ tick: number; actions: [AgentAction, AgentAction] }>,
   viewerFrames: ReadonlyArray<ViewerFrame>
 ): Promise<string> {
+  const d = getDb();
   const timestamp = new Date().toISOString();
 
   const frames: ReplayFrame[] = history.map((h) => ({
@@ -112,7 +104,12 @@ export async function saveReplay(
     actions: h.actions,
   }));
 
-  insertStmt.run({
+  d.prepare(`
+    INSERT OR REPLACE INTO replays
+      (match_id, timestamp, winner, reason, final_tick, frame_count, frames_json, viewer_frames_json)
+    VALUES
+      ($matchId, $timestamp, $winner, $reason, $finalTick, $frameCount, $framesJson, $viewerFramesJson)
+  `).run({
     $matchId: matchId,
     $timestamp: timestamp,
     $winner: result.winner,
@@ -135,7 +132,11 @@ export async function saveReplay(
 export async function loadReplay(
   matchId: string
 ): Promise<ReplayFile | null> {
-  const row = selectOneStmt.get({ $matchId: matchId }) as {
+  const d = getDb();
+
+  const row = d.prepare(
+    `SELECT * FROM replays WHERE match_id = $matchId`
+  ).get({ $matchId: matchId }) as {
     match_id: string;
     timestamp: string;
     winner: number | null;
@@ -165,7 +166,10 @@ export async function loadReplay(
  * List all available replay IDs (newest first).
  */
 export async function listReplays(): Promise<string[]> {
-  const rows = selectIdsStmt.all() as { match_id: string }[];
+  const d = getDb();
+  const rows = d.prepare(
+    `SELECT match_id FROM replays ORDER BY timestamp DESC`
+  ).all() as { match_id: string }[];
   return rows.map((r) => r.match_id);
 }
 
@@ -174,7 +178,11 @@ export async function listReplays(): Promise<string[]> {
  * Sorted newest first.
  */
 export async function listReplaySummaries(): Promise<ReplaySummary[]> {
-  const rows = selectSummariesStmt.all() as {
+  const d = getDb();
+  const rows = d.prepare(
+    `SELECT match_id, timestamp, winner, reason, final_tick, frame_count
+     FROM replays ORDER BY timestamp DESC`
+  ).all() as {
     match_id: string;
     timestamp: string;
     winner: number | null;
