@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { useMatchSocket } from "@/hooks/useMatchSocket";
 import { MatchHUD } from "@/components/MatchHUD";
+import { ThoughtBubbles } from "@/components/ThoughtBubbles";
 
 // Dynamic import to avoid SSR issues with Three.js
 const Arena3D = dynamic(
@@ -27,6 +28,7 @@ export default function Home() {
   return (
     <main className="relative w-screen h-screen">
       <MatchHUD />
+      <ThoughtBubbles />
       <Arena3D />
     </main>
   );

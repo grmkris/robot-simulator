@@ -22,6 +22,21 @@ export const AgentIdSchema = z.union([z.literal(0), z.literal(1)]);
 export const AgentActionSchema = z.object({
   leftArmTarget: z.number().min(-1).max(1),
   rightArmTarget: z.number().min(-1).max(1),
+  thought: z.string().max(200).optional(),
+  privateThought: z.string().max(200).optional(),
+});
+
+// ── Tactical Context (for LLM agents) ──
+
+export const TacticalContextSchema = z.object({
+  distanceToOpponent: z.number(),
+  myDistFromCenter: z.number(),
+  opponentDistFromCenter: z.number(),
+  closingSpeed: z.number(),
+  mySpeed: z.number(),
+  opponentSpeed: z.number(),
+  timeRemainingS: z.number(),
+  round: z.number().int(),
 });
 
 // ── Body / Arm / Robot State ──

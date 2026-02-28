@@ -10,6 +10,11 @@ const ReplayArena = dynamic(
   { ssr: false }
 );
 
+interface AgentThoughts {
+  thought: string | null;
+  privateThought: string | null;
+}
+
 interface ViewerRobotFrame {
   position: [number, number, number];
   rotation: [number, number, number, number];
@@ -20,6 +25,8 @@ interface ViewerFrame {
   tick: number;
   time: number;
   robots: [ViewerRobotFrame, ViewerRobotFrame];
+  thoughts?: { A: AgentThoughts; B: AgentThoughts };
+  round?: number;
 }
 
 interface ReplayData {
@@ -27,6 +34,7 @@ interface ReplayData {
   timestamp: string;
   result: { winner: number | null; reason: string; finalTick: number };
   viewerFrames: ViewerFrame[];
+  agentNames?: { A: string; B: string };
 }
 
 export default function ReplayPlayerPage() {
@@ -111,6 +119,8 @@ export default function ReplayPlayerPage() {
 
   const currentFrame = replay?.viewerFrames[frameIndex] ?? null;
   const totalFrames = replay?.viewerFrames.length ?? 0;
+  const nameA = replay?.agentNames?.A ?? "Robot A";
+  const nameB = replay?.agentNames?.B ?? "Robot B";
 
   if (loading) {
     return (
@@ -149,6 +159,9 @@ export default function ReplayPlayerPage() {
             <div className="text-lg font-mono font-bold text-yellow-400">REPLAY</div>
             <div className="text-xs text-gray-400 font-mono">
               TICK {currentFrame?.tick ?? 0} / {replay.result.finalTick}
+              {currentFrame?.round != null && (
+                <span className="ml-2 text-gray-500">R{currentFrame.round}</span>
+              )}
             </div>
           </div>
 
@@ -156,7 +169,7 @@ export default function ReplayPlayerPage() {
             <span className="text-xs font-mono">
               {replay.result.winner !== null ? (
                 <span className={replay.result.winner === 0 ? "text-blue-400" : "text-red-400"}>
-                  ROBOT {replay.result.winner === 0 ? "A" : "B"} WINS
+                  {replay.result.winner === 0 ? nameA : nameB} WINS
                 </span>
               ) : (
                 <span className="text-yellow-400">DRAW</span>
@@ -169,13 +182,42 @@ export default function ReplayPlayerPage() {
 
         <div className="flex justify-between px-8 mt-2">
           <div className="bg-blue-600/60 backdrop-blur rounded-lg px-4 py-2">
-            <span className="text-sm font-bold text-white">ROBOT A</span>
+            <span className="text-sm font-bold text-white">{nameA}</span>
           </div>
           <div className="bg-red-600/60 backdrop-blur rounded-lg px-4 py-2">
-            <span className="text-sm font-bold text-white">ROBOT B</span>
+            <span className="text-sm font-bold text-white">{nameB}</span>
           </div>
         </div>
       </div>
+
+      {/* Thought bubbles during replay */}
+      {currentFrame?.thoughts && (
+        <div className="absolute bottom-28 left-0 right-0 z-10 pointer-events-none">
+          <div className="flex justify-between items-end px-4 gap-4">
+            <ReplayThoughtPanel
+              name={nameA}
+              thought={currentFrame.thoughts.A.thought}
+              privateThought={currentFrame.thoughts.A.privateThought}
+              color="blue"
+              align="left"
+            />
+            {currentFrame.round != null && (
+              <div className="flex-shrink-0 bg-black/40 backdrop-blur rounded-lg px-3 py-1 mb-2">
+                <span className="text-xs font-mono text-gray-400">
+                  ROUND {currentFrame.round}
+                </span>
+              </div>
+            )}
+            <ReplayThoughtPanel
+              name={nameB}
+              thought={currentFrame.thoughts.B.thought}
+              privateThought={currentFrame.thoughts.B.privateThought}
+              color="red"
+              align="right"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Bottom playback controls */}
       <div className="absolute bottom-0 left-0 right-0 z-10 p-4">
@@ -228,5 +270,64 @@ export default function ReplayPlayerPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+function ReplayThoughtPanel({
+  name,
+  thought,
+  privateThought,
+  color,
+  align,
+}: {
+  name: string;
+  thought: string | null;
+  privateThought: string | null;
+  color: "blue" | "red";
+  align: "left" | "right";
+}) {
+  const borderColor =
+    color === "blue" ? "border-blue-500/30" : "border-red-500/30";
+  const bgColor =
+    color === "blue" ? "bg-blue-950/60" : "bg-red-950/60";
+  const nameColor =
+    color === "blue" ? "text-blue-400" : "text-red-400";
+  const textAlign = align === "left" ? "text-left" : "text-right";
+
+  const hasContent = thought || privateThought;
+
+  return (
+    <div
+      className={`max-w-[280px] w-full ${bgColor} backdrop-blur-md rounded-xl border ${borderColor} p-3 transition-all duration-300 ${
+        hasContent ? "opacity-100" : "opacity-40"
+      }`}
+    >
+      <div className={`text-xs font-mono font-bold ${nameColor} mb-1.5 ${textAlign}`}>
+        {name}
+      </div>
+
+      {thought ? (
+        <div className={`${textAlign} mb-1.5`}>
+          <span className="text-sm text-white leading-snug">
+            &ldquo;{thought}&rdquo;
+          </span>
+        </div>
+      ) : (
+        <div className={`${textAlign} mb-1.5`}>
+          <span className="text-xs text-gray-500 italic">no thought</span>
+        </div>
+      )}
+
+      {privateThought && (
+        <div className={`${textAlign} border-t border-white/5 pt-1.5 mt-1`}>
+          <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-0.5">
+            inner monologue
+          </span>
+          <span className="text-xs text-gray-400 italic leading-snug">
+            {privateThought}
+          </span>
+        </div>
+      )}
+    </div>
   );
 }

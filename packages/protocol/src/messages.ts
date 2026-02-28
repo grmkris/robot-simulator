@@ -4,6 +4,7 @@ import {
   AgentIdSchema,
   RobotStateSchema,
   MatchPhaseSchema,
+  TacticalContextSchema,
 } from "./schemas.js";
 
 // ═══════════════════════════════════════════════
@@ -16,6 +17,7 @@ export const WelcomeMessageSchema = z.object({
   agentId: AgentIdSchema,
   arenaRadius: z.number(),
   tickRate: z.number(),
+  decisionRate: z.number().optional(), // Hz — how often agent gets decision windows
 });
 
 export const TickMessageSchema = z.object({
@@ -24,6 +26,20 @@ export const TickMessageSchema = z.object({
   you: AgentIdSchema,
   robots: z.tuple([RobotStateSchema, RobotStateSchema]),
   matchPhase: MatchPhaseSchema,
+});
+
+/** Decision window — sent at AGENT_DECISION_RATE (2Hz) instead of per-tick */
+export const DecisionWindowMessageSchema = z.object({
+  type: z.literal("decision_window"),
+  round: z.number().int(),
+  tick: z.number().int(),
+  you: AgentIdSchema,
+  robots: z.tuple([RobotStateSchema, RobotStateSchema]),
+  matchPhase: MatchPhaseSchema,
+  tactical: TacticalContextSchema,
+  yourLastAction: AgentActionSchema,
+  opponentLastThought: z.string().nullable(),
+  deadline_ms: z.number(),
 });
 
 export const MatchEndMessageSchema = z.object({
@@ -46,9 +62,11 @@ export const JoinMessageSchema = z.object({
   name: z.string().min(1).max(32),
 });
 
+/** Legacy tick-based action (for backward compat with old agents) */
 export const ActionMessageSchema = z.object({
   type: z.literal("action"),
-  tick: z.number().int(),
+  tick: z.number().int().optional(),
+  round: z.number().int().optional(),
   action: AgentActionSchema,
 });
 
@@ -59,6 +77,7 @@ export const ActionMessageSchema = z.object({
 export const ServerMessageSchema = z.discriminatedUnion("type", [
   WelcomeMessageSchema,
   TickMessageSchema,
+  DecisionWindowMessageSchema,
   MatchEndMessageSchema,
   ErrorMessageSchema,
 ]);
@@ -76,6 +95,7 @@ export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type WelcomeMessage = z.infer<typeof WelcomeMessageSchema>;
 export type TickMessage = z.infer<typeof TickMessageSchema>;
+export type DecisionWindowMessage = z.infer<typeof DecisionWindowMessageSchema>;
 export type MatchEndMessage = z.infer<typeof MatchEndMessageSchema>;
 export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
 export type JoinMessage = z.infer<typeof JoinMessageSchema>;

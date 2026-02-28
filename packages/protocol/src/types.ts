@@ -41,6 +41,28 @@ export interface RobotState {
 export interface AgentAction {
   leftArmTarget: number;
   rightArmTarget: number;
+  /** Public thought — visible to opponent AND spectators (for mind games) */
+  thought?: string;
+  /** Private thought — visible to spectators ONLY (inner monologue) */
+  privateThought?: string;
+}
+
+/** Pre-computed tactical summary for LLM agents */
+export interface TacticalContext {
+  distanceToOpponent: number;
+  myDistFromCenter: number;
+  opponentDistFromCenter: number;
+  closingSpeed: number;
+  mySpeed: number;
+  opponentSpeed: number;
+  timeRemainingS: number;
+  round: number;
+}
+
+/** Agent thought state for viewer/replay */
+export interface AgentThoughts {
+  thought: string | null;
+  privateThought: string | null;
 }
 
 /** Full world snapshot at a given tick */
@@ -78,4 +100,13 @@ export interface ViewerState {
   time: number;
   robots: [ViewerRobotState, ViewerRobotState];
   matchPhase: MatchPhase;
+  /** Agent thoughts for Mind Games mode */
+  thoughts?: {
+    A: AgentThoughts;
+    B: AgentThoughts;
+  };
+  /** Current decision round */
+  round?: number;
+  /** Agent names */
+  agentNames?: { A: string; B: string };
 }

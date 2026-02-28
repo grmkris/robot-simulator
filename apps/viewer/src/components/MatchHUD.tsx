@@ -10,7 +10,7 @@ function formatTime(seconds: number): string {
 }
 
 export function MatchHUD() {
-  const { tick, time, matchPhase, connected, winner, winReason } =
+  const { tick, time, matchPhase, connected, winner, winReason, agentNames, round } =
     useArenaStore();
 
   return (
@@ -36,6 +36,9 @@ export function MatchHUD() {
           </div>
           <div className="text-xs text-gray-400 font-mono">
             TICK {tick}
+            {matchPhase === "active" && round > 0 && (
+              <span className="ml-2 text-gray-500">R{round}</span>
+            )}
           </div>
         </div>
 
@@ -57,7 +60,7 @@ export function MatchHUD() {
                     : "text-gray-400"
               }`}
             >
-              {matchPhase === "active" && "FIGHTING"}
+              {matchPhase === "active" && "MIND GAMES"}
               {matchPhase === "waiting" && "WAITING FOR AGENTS"}
               {matchPhase === "countdown" && "GET READY"}
               {matchPhase === "finished" && "MATCH OVER"}
@@ -67,13 +70,13 @@ export function MatchHUD() {
         </div>
       </div>
 
-      {/* Robot labels */}
+      {/* Robot labels — now showing agent names */}
       <div className="flex justify-between px-8 mt-2">
         <div className="bg-blue-600/60 backdrop-blur rounded-lg px-4 py-2">
-          <span className="text-sm font-bold text-white">ROBOT A</span>
+          <span className="text-sm font-bold text-white">{agentNames.A}</span>
         </div>
         <div className="bg-red-600/60 backdrop-blur rounded-lg px-4 py-2">
-          <span className="text-sm font-bold text-white">ROBOT B</span>
+          <span className="text-sm font-bold text-white">{agentNames.B}</span>
         </div>
       </div>
 
@@ -91,7 +94,7 @@ export function MatchHUD() {
                     winner === 0 ? "text-blue-400" : "text-red-400"
                   }
                 >
-                  ROBOT {winner === 0 ? "A" : "B"} WINS
+                  {winner === 0 ? agentNames.A : agentNames.B} WINS
                 </span>
               ) : (
                 <span className="text-yellow-400">DRAW</span>
@@ -108,8 +111,11 @@ export function MatchHUD() {
       {(matchPhase === "disconnected" || matchPhase === "waiting") && (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="bg-black/60 backdrop-blur rounded-xl px-8 py-6 text-center">
-            <div className="text-xl text-white font-mono mb-2">
+            <div className="text-xl text-white font-mono mb-1">
               AI ACTUATOR ARENA
+            </div>
+            <div className="text-xs text-purple-400 font-mono mb-3">
+              MIND GAMES EDITION
             </div>
             <div className="text-sm text-gray-400 font-mono">
               {matchPhase === "disconnected"

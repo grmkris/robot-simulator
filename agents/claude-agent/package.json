@@ -1,0 +1,19 @@
+{
+  "name": "@ai-arena/claude-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@ai-arena/protocol": "workspace:*",
+    "@ai-arena/agent-sdk": "workspace:*",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  },
+  "scripts": {
+    "start": "bun run src/main.ts"
+  }
+}

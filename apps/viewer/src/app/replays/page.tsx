@@ -12,6 +12,7 @@ interface ReplaySummary {
     finalTick: number;
   };
   frameCount: number;
+  agentNames?: { A: string; B: string };
 }
 
 export default function ReplaysPage() {
@@ -94,6 +95,8 @@ export default function ReplaysPage() {
             const durationSecs = replay.result.finalTick / 60;
             const mins = Math.floor(durationSecs / 60);
             const secs = Math.floor(durationSecs % 60);
+            const nameA = replay.agentNames?.A ?? "Robot A";
+            const nameB = replay.agentNames?.B ?? "Robot B";
 
             return (
               <Link
@@ -103,6 +106,12 @@ export default function ReplaysPage() {
               >
                 <div className="flex items-center justify-between">
                   <div>
+                    {/* Matchup header */}
+                    <div className="font-mono text-sm text-gray-400 mb-1">
+                      <span className="text-blue-400">{nameA}</span>
+                      {" vs "}
+                      <span className="text-red-400">{nameB}</span>
+                    </div>
                     <div className="font-mono text-lg font-bold">
                       {replay.result.winner !== null ? (
                         <span
@@ -112,7 +121,7 @@ export default function ReplaysPage() {
                               : "text-red-400"
                           }
                         >
-                          ROBOT {replay.result.winner === 0 ? "A" : "B"} WINS
+                          {replay.result.winner === 0 ? nameA : nameB} WINS
                         </span>
                       ) : (
                         <span className="text-yellow-400">DRAW</span>

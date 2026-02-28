@@ -9,6 +9,8 @@ COPY packages/agent-sdk/package.json packages/agent-sdk/package.json
 COPY apps/server/package.json apps/server/package.json
 COPY agents/random-agent/package.json agents/random-agent/package.json
 COPY agents/heuristic-agent/package.json agents/heuristic-agent/package.json
+COPY agents/aggressive-agent/package.json agents/aggressive-agent/package.json
+COPY agents/claude-agent/package.json agents/claude-agent/package.json
 # Viewer placeholder so bun install doesn't fail on missing workspace
 COPY apps/viewer/package.json apps/viewer/package.json
 

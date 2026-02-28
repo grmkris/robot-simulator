@@ -127,8 +127,8 @@ export function createWSRoutes(matchManager: MatchManager): Hono {
 
             matchManager.receiveAction(
               data.agentId,
-              msg.tick,
-              msg.action
+              msg.action,
+              msg.round
             );
             break;
           }

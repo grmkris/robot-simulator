@@ -6,7 +6,11 @@
  */
 import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentAction, MatchResult } from "@ai-arena/protocol";
+import type {
+  AgentAction,
+  AgentThoughts,
+  MatchResult,
+} from "@ai-arena/protocol";
 
 export interface ReplayFrame {
   tick: number;
@@ -18,6 +22,10 @@ export interface ViewerFrame {
   tick: number;
   time: number;
   robots: [ViewerRobotFrame, ViewerRobotFrame];
+  /** Agent thoughts at this frame (Mind Games) */
+  thoughts?: { A: AgentThoughts; B: AgentThoughts };
+  /** Decision round number */
+  round?: number;
 }
 
 export interface ViewerRobotFrame {
@@ -33,6 +41,8 @@ export interface ReplayFile {
   result: MatchResult;
   frames: ReplayFrame[];
   viewerFrames: ViewerFrame[];
+  /** Agent display names */
+  agentNames?: { A: string; B: string };
 }
 
 /** Summary metadata for the replay list (no frame data) */
@@ -41,6 +51,7 @@ export interface ReplaySummary {
   timestamp: string;
   result: MatchResult;
   frameCount: number;
+  agentNames?: { A: string; B: string };
 }
 
 const REPLAY_DIR = process.env.REPLAY_DIR || "./data/replays";
@@ -52,7 +63,8 @@ export async function saveReplay(
   matchId: string,
   result: MatchResult,
   history: ReadonlyArray<{ tick: number; actions: [AgentAction, AgentAction] }>,
-  viewerFrames: ReadonlyArray<ViewerFrame>
+  viewerFrames: ReadonlyArray<ViewerFrame>,
+  agentNames?: { A: string; B: string }
 ): Promise<string> {
   await mkdir(REPLAY_DIR, { recursive: true });
 
@@ -66,6 +78,7 @@ export async function saveReplay(
       actions: h.actions,
     })),
     viewerFrames: viewerFrames as ViewerFrame[],
+    agentNames,
   };
 
   const filePath = join(REPLAY_DIR, `${matchId}.json`);
@@ -127,6 +140,7 @@ export async function listReplaySummaries(): Promise<ReplaySummary[]> {
           timestamp: replay.timestamp,
           result: replay.result,
           frameCount: replay.viewerFrames?.length ?? replay.frames.length,
+          agentNames: replay.agentNames,
         });
       } catch {
         // skip corrupt files

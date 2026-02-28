@@ -7,12 +7,27 @@ export interface ViewerRobotState {
   armAngles: [number, number]; // [left, right]
 }
 
+/** Agent thoughts for Mind Games mode */
+export interface AgentThoughts {
+  thought: string | null;
+  privateThought: string | null;
+}
+
 export interface ViewerStateMessage {
   type: "state";
   tick: number;
   time: number;
   robots: [ViewerRobotState, ViewerRobotState];
   matchPhase: "waiting" | "countdown" | "active" | "finished";
+  /** Agent thoughts (Mind Games) */
+  thoughts?: {
+    A: AgentThoughts;
+    B: AgentThoughts;
+  };
+  /** Current decision round */
+  round?: number;
+  /** Agent display names */
+  agentNames?: { A: string; B: string };
 }
 
 export interface MatchEndMessage {

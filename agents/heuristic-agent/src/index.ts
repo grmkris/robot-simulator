@@ -1,4 +1,5 @@
 import type { AgentAction, WorldState, AgentId } from "@ai-arena/protocol";
+import type { DecisionContext } from "@ai-arena/agent-sdk";
 
 /**
  * Aggressive Heuristic Agent — "The Brawler"
@@ -8,10 +9,13 @@ import type { AgentAction, WorldState, AgentId } from "@ai-arena/protocol";
  * 2. When close to opponent, does alternating power slams
  * 3. When near the edge, pulls arms back defensively
  * 4. Uses sinusoidal oscillation for unpredictable arm movement
+ *
+ * In Mind Games mode, emits tactical thoughts to psych out opponent.
  */
 export function heuristicAgent(
   agentId: AgentId,
-  state: WorldState
+  state: WorldState,
+  context?: DecisionContext
 ): AgentAction {
   const me = state.robots[agentId];
   const opponentIdx = agentId === 0 ? 1 : 0;
@@ -35,30 +39,45 @@ export function heuristicAgent(
   // Time-based oscillation for windmill punching
   const t = state.tick;
 
+  let action: AgentAction;
+  let mode: string;
+
   // ── Close range: alternating power punches ──
   if (distToOpponent < 3) {
-    // Rapid alternating slams — left and right out of phase
     const leftSwing = Math.sin(t * 0.15 * Math.PI * 2);
     const rightSwing = Math.sin(t * 0.15 * Math.PI * 2 + Math.PI);
-
-    return {
-      leftArmTarget: leftSwing,
-      rightArmTarget: rightSwing,
-    };
+    action = { leftArmTarget: leftSwing, rightArmTarget: rightSwing };
+    mode = "brawling";
   }
-
   // ── Near edge: defensive — pull arms back ──
-  if (myDistFromCenter > 3.5) {
-    return {
-      leftArmTarget: -0.8,
-      rightArmTarget: -0.8,
+  else if (myDistFromCenter > 3.5) {
+    action = { leftArmTarget: -0.8, rightArmTarget: -0.8 };
+    mode = "defensive";
+  }
+  // ── Mid range: wind up for a big hit ──
+  else {
+    const windUp = Math.sin(t * 0.08 * Math.PI * 2);
+    action = {
+      leftArmTarget: windUp > 0 ? 1 : -0.5,
+      rightArmTarget: windUp > 0 ? 1 : -0.5,
     };
+    mode = "winding up";
   }
 
-  // ── Mid range: wind up for a big hit ──
-  const windUp = Math.sin(t * 0.08 * Math.PI * 2);
-  return {
-    leftArmTarget: windUp > 0 ? 1 : -0.5,
-    rightArmTarget: windUp > 0 ? 1 : -0.5,
-  };
+  // Add thoughts in Mind Games mode
+  if (context) {
+    const dist = context.tactical.distanceToOpponent;
+    if (mode === "brawling") {
+      action.thought = "FEEL MY FISTS!";
+      action.privateThought = `Close range brawl — dist ${dist.toFixed(1)}m`;
+    } else if (mode === "defensive") {
+      action.thought = "Come closer, I dare you...";
+      action.privateThought = `Near edge (${myDistFromCenter.toFixed(1)}m from center), playing defensive`;
+    } else {
+      action.thought = "Winding up something big...";
+      action.privateThought = `Mid range wind-up, opponent at ${dist.toFixed(1)}m`;
+    }
+  }
+
+  return action;
 }

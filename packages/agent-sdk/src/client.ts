@@ -1,11 +1,26 @@
 /**
  * ArenaClient — TypeScript SDK for connecting AI agents to the arena.
  *
- * Usage:
+ * Supports both legacy tick-based agents and new Mind Games decision_window agents.
+ *
+ * Usage (simple):
  *   const client = new ArenaClient({
  *     serverUrl: "ws://localhost:3000/ws/agent",
  *     name: "MyBot",
  *     brain: (agentId, state) => ({ leftArmTarget: 0.5, rightArmTarget: -0.3 }),
+ *   });
+ *   client.connect();
+ *
+ * Usage (Mind Games — async + thoughts):
+ *   const client = new ArenaClient({
+ *     serverUrl: "ws://localhost:3000/ws/agent",
+ *     name: "ClaudeBot",
+ *     brain: async (agentId, state, context) => ({
+ *       leftArmTarget: 0.5,
+ *       rightArmTarget: -0.3,
+ *       thought: "I see you...",
+ *       privateThought: "Going for the left flank",
+ *     }),
  *   });
  *   client.connect();
  */
@@ -14,25 +29,40 @@ import type {
   AgentId,
   WorldState,
   MatchPhase,
+  TacticalContext,
 } from "@ai-arena/protocol";
 import { TICK_RATE } from "@ai-arena/protocol";
 
+/** Context provided to the brain in Mind Games mode (decision_window) */
+export interface DecisionContext {
+  /** Pre-computed tactical data (distances, speeds, closing rate) */
+  tactical: TacticalContext;
+  /** Your current action (persists until you send a new one) */
+  currentAction: AgentAction;
+  /** Opponent's last public thought (for mind games!) */
+  opponentThought: string | null;
+  /** Current decision round number */
+  round: number;
+}
+
 /**
  * The brain function an agent author implements.
- * Receives the current world state and assigned agent ID.
- * Returns the action to take this tick.
+ *
+ * Can be sync or async. When called from a decision_window, receives
+ * extra context (tactical info, opponent thoughts, etc.).
  */
 export type AgentBrain = (
   agentId: AgentId,
-  state: WorldState
-) => AgentAction;
+  state: WorldState,
+  context?: DecisionContext
+) => AgentAction | Promise<AgentAction>;
 
 export interface ArenaClientOptions {
   /** WebSocket URL, e.g. "ws://localhost:3000/ws/agent" */
   serverUrl: string;
   /** Agent display name (max 32 chars) */
   name: string;
-  /** The decision function called each tick */
+  /** The decision function — sync or async */
   brain: AgentBrain;
   /** Called when match ends */
   onMatchEnd?: (winner: AgentId | null, reason: string) => void;
@@ -100,12 +130,60 @@ export class ArenaClient {
     switch (msg.type) {
       case "welcome": {
         this.agentId = msg.agentId as AgentId;
+        const decisionRate = msg.decisionRate as number | undefined;
         console.log(
-          `[${this.options.name}] Assigned as Robot ${this.agentId}. Waiting for match...`
+          `[${this.options.name}] Assigned as Robot ${this.agentId}` +
+          (decisionRate ? ` (${decisionRate}Hz decisions)` : "") +
+          `. Waiting for match...`
         );
         break;
       }
 
+      // ── Mind Games: 2Hz decision windows ──
+      case "decision_window": {
+        if (this.agentId === null) return;
+
+        const round = msg.round as number;
+        const tick = msg.tick as number;
+        const robots = msg.robots as WorldState["robots"];
+        const matchPhase = msg.matchPhase as MatchPhase;
+        const tactical = msg.tactical as TacticalContext;
+        const yourLastAction = msg.yourLastAction as AgentAction;
+        const opponentLastThought = msg.opponentLastThought as string | null;
+
+        const worldState: WorldState = {
+          tick,
+          elapsed: tick / TICK_RATE,
+          robots,
+          matchPhase,
+        };
+
+        const context: DecisionContext = {
+          tactical,
+          currentAction: yourLastAction,
+          opponentThought: opponentLastThought,
+          round,
+        };
+
+        // Call brain — supports both sync and async
+        const result = this.options.brain(this.agentId, worldState, context);
+        Promise.resolve(result)
+          .then((action) => {
+            this.ws?.send(
+              JSON.stringify({
+                type: "action",
+                round,
+                action,
+              })
+            );
+          })
+          .catch((err) => {
+            console.error(`[${this.options.name}] Brain error:`, err);
+          });
+        break;
+      }
+
+      // ── Legacy: per-tick state (backward compat) ──
       case "tick": {
         if (this.agentId === null) return;
         const matchPhase = msg.matchPhase as MatchPhase;
@@ -114,7 +192,6 @@ export class ArenaClient {
         const tick = msg.tick as number;
         const robots = msg.robots as WorldState["robots"];
 
-        // Reconstruct WorldState for the brain
         const worldState: WorldState = {
           tick,
           elapsed: tick / TICK_RATE,
@@ -122,17 +199,21 @@ export class ArenaClient {
           matchPhase,
         };
 
-        // Call the brain to decide action
+        // Call brain (no context for legacy mode)
         const action = this.options.brain(this.agentId, worldState);
-
-        // Send action back to server
-        this.ws?.send(
-          JSON.stringify({
-            type: "action",
-            tick,
-            action,
+        Promise.resolve(action)
+          .then((a) => {
+            this.ws?.send(
+              JSON.stringify({
+                type: "action",
+                tick,
+                action: a,
+              })
+            );
           })
-        );
+          .catch((err) => {
+            console.error(`[${this.options.name}] Brain error:`, err);
+          });
         break;
       }
 
