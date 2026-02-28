@@ -1,14 +1,12 @@
 /**
- * Replay recording and storage — SQLite backend.
+ * Replay recording and storage — file-based with persistent volume.
  *
- * Uses Bun's built-in SQLite for persistent storage.
- * On Railway, mount a persistent volume at /data to survive redeploys.
- * Lazy initialization to avoid crashing if the volume isn't ready yet.
+ * Saves match replays as JSON files.
+ * On Railway, set REPLAY_DIR=/data/replays to use the persistent volume.
  */
-import { Database } from "bun:sqlite";
+import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { AgentAction, MatchResult } from "@ai-arena/protocol";
-import { mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
 
 export interface ReplayFrame {
   tick: number;
@@ -45,50 +43,10 @@ export interface ReplaySummary {
   frameCount: number;
 }
 
-// ── Lazy Database initialization ──
-
-const DB_PATH = process.env.DB_PATH || "./data/arena.db";
-
-let db: Database | null = null;
-
-function getDb(): Database {
-  if (db) return db;
-
-  try {
-    const dir = dirname(DB_PATH);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    db = new Database(DB_PATH);
-    db.run("PRAGMA journal_mode = WAL");
-
-    db.run(`
-      CREATE TABLE IF NOT EXISTS replays (
-        match_id TEXT PRIMARY KEY,
-        timestamp TEXT NOT NULL,
-        winner INTEGER,
-        reason TEXT NOT NULL,
-        final_tick INTEGER NOT NULL,
-        frame_count INTEGER NOT NULL,
-        frames_json TEXT NOT NULL,
-        viewer_frames_json TEXT NOT NULL
-      )
-    `);
-
-    console.log(`[Replay] SQLite database initialized at ${DB_PATH}`);
-  } catch (err) {
-    console.error(`[Replay] Failed to initialize SQLite at ${DB_PATH}:`, err);
-    throw err;
-  }
-
-  return db;
-}
-
-// ── Public API ──
+const REPLAY_DIR = process.env.REPLAY_DIR || "./data/replays";
 
 /**
- * Save a match replay to the database.
+ * Save a match replay to disk.
  */
 export async function saveReplay(
   matchId: string,
@@ -96,111 +54,95 @@ export async function saveReplay(
   history: ReadonlyArray<{ tick: number; actions: [AgentAction, AgentAction] }>,
   viewerFrames: ReadonlyArray<ViewerFrame>
 ): Promise<string> {
-  const d = getDb();
-  const timestamp = new Date().toISOString();
+  await mkdir(REPLAY_DIR, { recursive: true });
 
-  const frames: ReplayFrame[] = history.map((h) => ({
-    tick: h.tick,
-    actions: h.actions,
-  }));
+  const replay: ReplayFile = {
+    version: 2,
+    matchId,
+    timestamp: new Date().toISOString(),
+    result,
+    frames: history.map((h) => ({
+      tick: h.tick,
+      actions: h.actions,
+    })),
+    viewerFrames: viewerFrames as ViewerFrame[],
+  };
 
-  d.prepare(`
-    INSERT OR REPLACE INTO replays
-      (match_id, timestamp, winner, reason, final_tick, frame_count, frames_json, viewer_frames_json)
-    VALUES
-      ($matchId, $timestamp, $winner, $reason, $finalTick, $frameCount, $framesJson, $viewerFramesJson)
-  `).run({
-    $matchId: matchId,
-    $timestamp: timestamp,
-    $winner: result.winner,
-    $reason: result.reason,
-    $finalTick: result.finalTick,
-    $frameCount: viewerFrames.length,
-    $framesJson: JSON.stringify(frames),
-    $viewerFramesJson: JSON.stringify(viewerFrames),
-  });
+  const filePath = join(REPLAY_DIR, `${matchId}.json`);
+  await writeFile(filePath, JSON.stringify(replay), "utf-8");
 
   console.log(
-    `[Replay] Saved ${frames.length} frames + ${viewerFrames.length} viewer frames for ${matchId}`
+    `[Replay] Saved ${replay.frames.length} frames + ${replay.viewerFrames.length} viewer frames to ${filePath}`
   );
-  return matchId;
+  return filePath;
 }
 
 /**
- * Load a full replay from the database.
+ * Load a replay file from disk.
  */
 export async function loadReplay(
   matchId: string
 ): Promise<ReplayFile | null> {
-  const d = getDb();
-
-  const row = d.prepare(
-    `SELECT * FROM replays WHERE match_id = $matchId`
-  ).get({ $matchId: matchId }) as {
-    match_id: string;
-    timestamp: string;
-    winner: number | null;
-    reason: string;
-    final_tick: number;
-    frames_json: string;
-    viewer_frames_json: string;
-  } | null;
-
-  if (!row) return null;
-
-  return {
-    version: 2,
-    matchId: row.match_id,
-    timestamp: row.timestamp,
-    result: {
-      winner: row.winner as MatchResult["winner"],
-      reason: row.reason as MatchResult["reason"],
-      finalTick: row.final_tick,
-    },
-    frames: JSON.parse(row.frames_json),
-    viewerFrames: JSON.parse(row.viewer_frames_json),
-  };
+  try {
+    const filePath = join(REPLAY_DIR, `${matchId}.json`);
+    const content = await readFile(filePath, "utf-8");
+    return JSON.parse(content) as ReplayFile;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * List all available replay IDs (newest first).
+ * List all available replay IDs.
  */
 export async function listReplays(): Promise<string[]> {
-  const d = getDb();
-  const rows = d.prepare(
-    `SELECT match_id FROM replays ORDER BY timestamp DESC`
-  ).all() as { match_id: string }[];
-  return rows.map((r) => r.match_id);
+  try {
+    await mkdir(REPLAY_DIR, { recursive: true });
+    const files = await readdir(REPLAY_DIR);
+    return files
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => f.replace(".json", ""));
+  } catch {
+    return [];
+  }
 }
 
 /**
- * List replay summaries with metadata (no frame data).
+ * List replay summaries with metadata (no full frame data).
  * Sorted newest first.
  */
 export async function listReplaySummaries(): Promise<ReplaySummary[]> {
-  const d = getDb();
-  const rows = d.prepare(
-    `SELECT match_id, timestamp, winner, reason, final_tick, frame_count
-     FROM replays ORDER BY timestamp DESC`
-  ).all() as {
-    match_id: string;
-    timestamp: string;
-    winner: number | null;
-    reason: string;
-    final_tick: number;
-    frame_count: number;
-  }[];
+  try {
+    await mkdir(REPLAY_DIR, { recursive: true });
+    const files = await readdir(REPLAY_DIR);
+    const jsonFiles = files.filter((f) => f.endsWith(".json"));
 
-  return rows.map((row) => ({
-    matchId: row.match_id,
-    timestamp: row.timestamp,
-    result: {
-      winner: row.winner as MatchResult["winner"],
-      reason: row.reason as MatchResult["reason"],
-      finalTick: row.final_tick,
-    },
-    frameCount: row.frame_count,
-  }));
+    const summaries: ReplaySummary[] = [];
+    for (const file of jsonFiles) {
+      try {
+        const content = await readFile(join(REPLAY_DIR, file), "utf-8");
+        const replay = JSON.parse(content) as ReplayFile;
+        summaries.push({
+          matchId: replay.matchId,
+          timestamp: replay.timestamp,
+          result: replay.result,
+          frameCount: replay.viewerFrames?.length ?? replay.frames.length,
+        });
+      } catch {
+        // skip corrupt files
+      }
+    }
+
+    // Sort newest first
+    summaries.sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+
+    return summaries;
+  } catch {
+    return [];
+  }
 }
 
 /**
