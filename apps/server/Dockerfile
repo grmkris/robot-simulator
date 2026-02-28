@@ -13,7 +13,7 @@ COPY agents/heuristic-agent/package.json agents/heuristic-agent/package.json
 COPY apps/viewer/package.json apps/viewer/package.json
 
 # Install dependencies
-RUN bun install --frozen-lockfile
+RUN bun install
 
 # Copy source
 COPY packages/ packages/
