@@ -16,8 +16,7 @@ if (auth) {
   console.log(`[ClaudeAgent] Auth: ${auth.source}`);
 }
 const anthropic = new Anthropic({
-  apiKey: auth?.apiKey ?? undefined,
-  authToken: auth?.authToken ?? undefined,
+  apiKey: auth?.apiKey,
 });
 
 const SYSTEM_PROMPT = `You are a robot fighter in a sumo-style arena with knockback projectiles.

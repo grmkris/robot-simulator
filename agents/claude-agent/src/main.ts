@@ -13,11 +13,9 @@ import { resolveAnthropicAuth } from "./auth.js";
 const auth = resolveAnthropicAuth();
 if (!auth) {
   console.error(
-    "[ClaudeAgent] ERROR: No Anthropic authentication found.\n" +
-      "  Options:\n" +
-      "  1. Set ANTHROPIC_API_KEY environment variable\n" +
-      "  2. Set ANTHROPIC_AUTH_TOKEN environment variable\n" +
-      "  3. Have Claude Code credentials at ~/.claude/.credentials.json"
+    "[ClaudeAgent] ERROR: ANTHROPIC_API_KEY not set.\n" +
+      "  Usage: ANTHROPIC_API_KEY=sk-... SERVER_URL=http://localhost:3000 bun run agents/claude-agent/src/main.ts\n" +
+      "  Note: Claude Code OAuth tokens are NOT supported by the Anthropic API."
   );
   process.exit(1);
 }
