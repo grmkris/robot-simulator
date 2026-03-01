@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "ai-arena": {
-      "command": "bun",
-      "args": ["run", "packages/arena-mcp/src/main.ts"]
-    }
-  }
-}

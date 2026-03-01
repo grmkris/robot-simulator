@@ -1,7 +1,8 @@
 node_modules/
-.next/
 dist/
 data/
-*.tsbuildinfo
-.env
-.env.local
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store
