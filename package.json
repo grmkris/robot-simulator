@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "drizzle-orm": "^0.44.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
