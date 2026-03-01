@@ -3,7 +3,10 @@
 import { useArenaStore } from "@/lib/store";
 
 export function ThoughtBubbles() {
-  const { thoughts, agentNames, matchPhase, round } = useArenaStore();
+  const thoughts = useArenaStore((s) => s.thoughts);
+  const agentNames = useArenaStore((s) => s.agentNames);
+  const matchPhase = useArenaStore((s) => s.matchPhase);
+  const round = useArenaStore((s) => s.round);
 
   if (matchPhase !== "active" && matchPhase !== "finished") return null;
 
@@ -23,7 +26,7 @@ export function ThoughtBubbles() {
         />
 
         {/* Round indicator */}
-        <div className="flex-shrink-0 bg-black/40 backdrop-blur rounded-lg px-3 py-1 mb-2">
+        <div className="flex-shrink-0 bg-black/60 rounded-lg px-3 py-1 mb-2">
           <span className="text-xs font-mono text-gray-400">
             ROUND {round}
           </span>
@@ -67,7 +70,7 @@ function ThoughtPanel({
 
   return (
     <div
-      className={`max-w-[280px] w-full ${bgColor} backdrop-blur-md rounded-xl border ${borderColor} p-3 transition-all duration-300 ${
+      className={`max-w-[280px] w-full ${bgColor} rounded-xl border ${borderColor} p-3 transition-all duration-300 ${
         hasContent ? "opacity-100" : "opacity-40"
       }`}
     >

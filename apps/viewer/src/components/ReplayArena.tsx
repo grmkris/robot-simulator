@@ -2,7 +2,7 @@
 
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
-import { RobotMesh } from "./RobotMesh";
+import { ReplayRobotMesh } from "./RobotMesh";
 import { ArenaFloor } from "./ArenaFloor";
 import { Lights } from "./Lights";
 import { ProjectileMesh } from "./ProjectileMesh";
@@ -47,7 +47,7 @@ function SceneContent({ frame, agentBuilds }: ReplayArenaProps) {
 
       {frame && (
         <>
-          <RobotMesh
+          <ReplayRobotMesh
             position={frame.robots[0].position}
             rotation={frame.robots[0].rotation}
             armAngles={frame.robots[0].armAngles}
@@ -55,7 +55,7 @@ function SceneContent({ frame, agentBuilds }: ReplayArenaProps) {
             emissiveColor="#4488ff"
             build={frame.robots[0].build ?? agentBuilds?.A}
           />
-          <RobotMesh
+          <ReplayRobotMesh
             position={frame.robots[1].position}
             rotation={frame.robots[1].rotation}
             armAngles={frame.robots[1].armAngles}

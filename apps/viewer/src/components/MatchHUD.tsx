@@ -10,10 +10,21 @@ function formatTime(seconds: number): string {
 }
 
 export function MatchHUD() {
-  const { tick, time, matchPhase, connected, winner, winReason, agentNames, builds, round, queue } =
-    useArenaStore();
+  // Granular selectors — only re-render when the selected value actually changes
+  const matchPhase = useArenaStore((s) => s.matchPhase);
+  const connected = useArenaStore((s) => s.connected);
+  const winner = useArenaStore((s) => s.winner);
+  const winReason = useArenaStore((s) => s.winReason);
+  const agentNames = useArenaStore((s) => s.agentNames);
+  const builds = useArenaStore((s) => s.builds);
+  const round = useArenaStore((s) => s.round);
+  const queueLength = useArenaStore((s) => s.queue.length);
 
-  // Don't show full HUD during waiting/disconnected — the LobbyView handles that
+  // Throttle timer — only re-render once per displayed second
+  const displaySeconds = useArenaStore((s) => Math.floor(s.time));
+  // Throttle tick display — update every 10 ticks instead of every tick
+  const displayTick = useArenaStore((s) => Math.floor(s.tick / 10) * 10);
+
   const showFullHUD = matchPhase === "active" || matchPhase === "countdown" || matchPhase === "finished";
 
   return (
@@ -21,7 +32,7 @@ export function MatchHUD() {
       {/* Top bar — always visible */}
       <div className="flex justify-between items-start p-4">
         {/* Connection status */}
-        <div className="flex items-center gap-2 bg-black/60 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto">
+        <div className="flex items-center gap-2 bg-black/70 rounded-lg px-3 py-2 pointer-events-auto">
           <div
             className={`w-2 h-2 rounded-full ${
               connected ? "bg-green-400 animate-pulse" : "bg-red-500"
@@ -30,21 +41,21 @@ export function MatchHUD() {
           <span className="text-xs text-gray-300 font-mono">
             {connected ? "LIVE" : "OFFLINE"}
           </span>
-          {queue.length > 0 && matchPhase === "active" && (
+          {queueLength > 0 && matchPhase === "active" && (
             <span className="text-xs text-gray-500 font-mono ml-1">
-              {queue.length} queued
+              {queueLength} queued
             </span>
           )}
         </div>
 
         {/* Timer / Phase */}
         {showFullHUD && (
-          <div className="bg-black/60 backdrop-blur rounded-lg px-4 py-2 text-center">
+          <div className="bg-black/70 rounded-lg px-4 py-2 text-center">
             <div className="text-2xl font-mono font-bold text-white">
-              {matchPhase === "active" ? formatTime(time) : matchPhase.toUpperCase()}
+              {matchPhase === "active" ? formatTime(displaySeconds) : matchPhase.toUpperCase()}
             </div>
             <div className="text-xs text-gray-400 font-mono">
-              TICK {tick}
+              TICK {displayTick}
               {matchPhase === "active" && round > 0 && (
                 <span className="ml-2 text-gray-500">R{round}</span>
               )}
@@ -56,18 +67,18 @@ export function MatchHUD() {
         <div className="flex items-center gap-2">
           <Link
             href="/leaderboard"
-            className="bg-black/60 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto hover:bg-white/10 transition-colors"
+            className="bg-black/70 rounded-lg px-3 py-2 pointer-events-auto hover:bg-white/10 transition-colors"
           >
             <span className="text-xs font-mono text-gray-300">RANKS</span>
           </Link>
           <Link
             href="/replays"
-            className="bg-black/60 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto hover:bg-white/10 transition-colors"
+            className="bg-black/70 rounded-lg px-3 py-2 pointer-events-auto hover:bg-white/10 transition-colors"
           >
             <span className="text-xs font-mono text-gray-300">REPLAYS</span>
           </Link>
           {showFullHUD && (
-            <div className="bg-black/60 backdrop-blur rounded-lg px-3 py-2">
+            <div className="bg-black/70 rounded-lg px-3 py-2">
               <span
                 className={`text-xs font-mono font-bold ${
                   matchPhase === "active"
@@ -91,7 +102,7 @@ export function MatchHUD() {
       {/* Robot labels — only during match */}
       {showFullHUD && (
         <div className="flex justify-between px-8 mt-2">
-          <div className="bg-blue-600/60 backdrop-blur rounded-lg px-4 py-2">
+          <div className="bg-blue-600/60 rounded-lg px-4 py-2">
             <span className="text-sm font-bold text-white">{agentNames.A}</span>
             {builds?.A && (
               <div className="text-[10px] text-blue-200/70 font-mono mt-0.5">
@@ -99,7 +110,7 @@ export function MatchHUD() {
               </div>
             )}
           </div>
-          <div className="bg-red-600/60 backdrop-blur rounded-lg px-4 py-2">
+          <div className="bg-red-600/60 rounded-lg px-4 py-2">
             <span className="text-sm font-bold text-white">{agentNames.B}</span>
             {builds?.B && (
               <div className="text-[10px] text-red-200/70 font-mono mt-0.5">
@@ -120,7 +131,7 @@ export function MatchHUD() {
               <span className="text-red-400">{agentNames.B}</span>
             </div>
             <div className="text-8xl font-bold text-white animate-pulse">
-              {Math.max(1, Math.ceil(5 - time))}
+              {Math.max(1, Math.ceil(5 - displaySeconds))}
             </div>
             <div className="text-sm text-cyan-400 font-mono mt-2 tracking-widest">
               GET READY
@@ -132,7 +143,7 @@ export function MatchHUD() {
       {/* Match result overlay */}
       {matchPhase === "finished" && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="bg-black/80 backdrop-blur-lg rounded-2xl px-10 py-8 text-center border border-white/10">
+          <div className="bg-black/80 rounded-2xl px-10 py-8 text-center border border-white/10">
             <div className="text-lg text-gray-400 font-mono mb-2">
               MATCH RESULT
             </div>
@@ -152,9 +163,9 @@ export function MatchHUD() {
             <div className="text-sm text-gray-400 font-mono uppercase">
               {winReason}
             </div>
-            {queue.length > 0 && (
+            {queueLength > 0 && (
               <div className="text-xs text-gray-500 font-mono mt-3">
-                Next match: {queue.length} agent{queue.length > 1 ? "s" : ""} in queue
+                Next match: {queueLength} agent{queueLength > 1 ? "s" : ""} in queue
               </div>
             )}
           </div>

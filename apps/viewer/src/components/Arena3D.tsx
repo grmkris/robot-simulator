@@ -1,19 +1,106 @@
 "use client";
 
-import { Canvas } from "@react-three/fiber";
+import { useRef } from "react";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
+import * as THREE from "three";
 import { RobotMesh } from "./RobotMesh";
 import { ArenaFloor } from "./ArenaFloor";
 import { Lights } from "./Lights";
 import { CameraRig } from "./CameraRig";
-import { ProjectileMesh } from "./ProjectileMesh";
 import { useArenaStore } from "@/lib/store";
 
-function SceneContent() {
-  const robots = useArenaStore((s) => s.robots);
-  const projectiles = useArenaStore((s) => s.projectiles);
-  const builds = useArenaStore((s) => s.builds);
+const MAX_PROJECTILES = 10;
 
+/**
+ * Renders projectiles using a pre-allocated pool.
+ * Reads from the store in useFrame — zero React re-renders.
+ */
+function ProjectilesRenderer() {
+  const groupRefs = useRef<(THREE.Group | null)[]>([]);
+  const meshRefs = useRef<(THREE.Mesh | null)[]>([]);
+  const matRefs = useRef<(THREE.MeshStandardMaterial | null)[]>([]);
+  const lightRefs = useRef<(THREE.PointLight | null)[]>([]);
+
+  useFrame(({ clock }) => {
+    const projectiles = useArenaStore.getState().projectiles;
+
+    for (let i = 0; i < MAX_PROJECTILES; i++) {
+      const group = groupRefs.current[i];
+      if (!group) continue;
+
+      if (i < projectiles.length) {
+        const proj = projectiles[i];
+        group.visible = true;
+        group.position.set(proj.position[0], proj.position[1], proj.position[2]);
+
+        // Update color based on owner
+        const mat = matRefs.current[i];
+        const light = lightRefs.current[i];
+        if (mat) {
+          if (proj.ownerId === 0) {
+            mat.color.set("#44aaff");
+            mat.emissive.set("#2288ff");
+          } else {
+            mat.color.set("#ff6622");
+            mat.emissive.set("#ff4400");
+          }
+        }
+        if (light) {
+          light.color.set(proj.ownerId === 0 ? "#44aaff" : "#ff6622");
+        }
+
+        // Pulse
+        const mesh = meshRefs.current[i];
+        if (mesh) {
+          const scale = 1 + Math.sin(clock.getElapsedTime() * 8) * 0.15;
+          mesh.scale.setScalar(scale);
+        }
+      } else {
+        group.visible = false;
+      }
+    }
+  });
+
+  return (
+    <>
+      {Array.from({ length: MAX_PROJECTILES }, (_, i) => (
+        <group
+          key={i}
+          ref={(el) => { groupRefs.current[i] = el; }}
+          visible={false}
+        >
+          <mesh
+            ref={(el) => { meshRefs.current[i] = el; }}
+            castShadow
+          >
+            <sphereGeometry args={[0.15, 10, 10]} />
+            <meshStandardMaterial
+              ref={(el) => { matRefs.current[i] = el; }}
+              color="#44aaff"
+              emissive="#2288ff"
+              emissiveIntensity={3}
+              toneMapped={false}
+            />
+          </mesh>
+          <pointLight
+            ref={(el) => { lightRefs.current[i] = el; }}
+            color="#44aaff"
+            intensity={1.5}
+            distance={2}
+            decay={2}
+          />
+        </group>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Static scene — no store subscriptions, no React re-renders during match.
+ * All dynamic data is read inside useFrame by child components.
+ */
+function SceneContent() {
   return (
     <>
       <Lights />
@@ -27,35 +114,9 @@ function SceneContent() {
         maxDistance={35}
       />
 
-      {robots && (
-        <>
-          <RobotMesh
-            position={robots[0].position}
-            rotation={robots[0].rotation}
-            armAngles={robots[0].armAngles}
-            color="#2266ff"
-            emissiveColor="#4488ff"
-            build={robots[0].build ?? builds?.A}
-          />
-          <RobotMesh
-            position={robots[1].position}
-            rotation={robots[1].rotation}
-            armAngles={robots[1].armAngles}
-            color="#ff4422"
-            emissiveColor="#ff6644"
-            build={robots[1].build ?? builds?.B}
-          />
-        </>
-      )}
-
-      {/* Render projectiles */}
-      {projectiles.map((proj, i) => (
-        <ProjectileMesh
-          key={`proj-${i}`}
-          position={proj.position}
-          ownerId={proj.ownerId}
-        />
-      ))}
+      <RobotMesh agentIndex={0} color="#2266ff" emissiveColor="#4488ff" />
+      <RobotMesh agentIndex={1} color="#ff4422" emissiveColor="#ff6644" />
+      <ProjectilesRenderer />
     </>
   );
 }

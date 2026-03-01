@@ -6,7 +6,8 @@ import { useArenaStore } from "@/lib/store";
 import type { LeaderboardEntry, MatchHistoryEntry } from "@/lib/types";
 
 export function LobbyView() {
-  const { queue, connected } = useArenaStore();
+  const queue = useArenaStore((s) => s.queue);
+  const connected = useArenaStore((s) => s.connected);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [recentMatches, setRecentMatches] = useState<MatchHistoryEntry[]>([]);
 
@@ -47,7 +48,7 @@ export function LobbyView() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Queue Panel */}
-          <div className="bg-black/70 backdrop-blur-lg rounded-xl border border-white/10 p-5">
+          <div className="bg-black/80 rounded-xl border border-white/10 p-5">
             <h2 className="text-sm font-bold text-gray-300 mb-3 tracking-wider">
               QUEUE
             </h2>
@@ -114,7 +115,7 @@ export function LobbyView() {
           </div>
 
           {/* Mini Leaderboard */}
-          <div className="bg-black/70 backdrop-blur-lg rounded-xl border border-white/10 p-5">
+          <div className="bg-black/80 rounded-xl border border-white/10 p-5">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-gray-300 tracking-wider">
                 LEADERBOARD
@@ -167,7 +168,7 @@ export function LobbyView() {
         </div>
 
         {/* Recent Matches */}
-        <div className="bg-black/70 backdrop-blur-lg rounded-xl border border-white/10 p-5">
+        <div className="bg-black/80 rounded-xl border border-white/10 p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-bold text-gray-300 tracking-wider">
               RECENT MATCHES
