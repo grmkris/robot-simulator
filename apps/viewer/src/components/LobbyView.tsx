@@ -11,12 +11,12 @@ export function LobbyView() {
   const [recentMatches, setRecentMatches] = useState<MatchHistoryEntry[]>([]);
 
   useEffect(() => {
-    fetch("/api/leaderboard")
+    fetch("/api/leaderboard", { signal: AbortSignal.timeout(8000) })
       .then((r) => r.json())
       .then((d) => setLeaderboard(d.leaderboard ?? []))
       .catch(() => {});
 
-    fetch("/api/match-history?limit=5")
+    fetch("/api/match-history?limit=5", { signal: AbortSignal.timeout(8000) })
       .then((r) => r.json())
       .then((d) => setRecentMatches(d.matches ?? []))
       .catch(() => {});

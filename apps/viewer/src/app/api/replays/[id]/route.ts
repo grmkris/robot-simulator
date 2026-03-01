@@ -10,7 +10,10 @@ export async function GET(
   try {
     const { id } = await params;
     const serverUrl = getServerUrl();
-    const res = await fetch(`${serverUrl}/api/replays/${id}`, { cache: "no-store" });
+    const res = await fetch(`${serverUrl}/api/replays/${id}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    });
     if (!res.ok) {
       return NextResponse.json({ error: "Replay not found" }, { status: 404 });
     }

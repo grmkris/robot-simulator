@@ -9,7 +9,7 @@ export default function LeaderboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/leaderboard")
+    fetch("/api/leaderboard", { signal: AbortSignal.timeout(8000) })
       .then((r) => r.json())
       .then((d) => {
         setLeaderboard(d.leaderboard ?? []);

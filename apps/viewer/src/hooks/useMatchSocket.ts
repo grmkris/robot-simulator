@@ -6,11 +6,12 @@ import type { ServerViewerMessage } from "@/lib/types";
 
 /**
  * Connects to the arena server's spectator WebSocket.
- * Automatically reconnects on disconnect.
+ * Automatically reconnects on disconnect with exponential backoff.
  */
 export function useMatchSocket(serverUrl: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCount = useRef(0);
   const { setConnected, updateState, setMatchEnd, updateLobby, reset } = useArenaStore();
 
   useEffect(() => {
@@ -18,6 +19,11 @@ export function useMatchSocket(serverUrl: string | null) {
 
     const url = serverUrl; // Capture for closure narrowing
     let unmounted = false;
+
+    function getBackoffMs() {
+      // Exponential backoff: 1s, 2s, 4s, 8s, max 15s
+      return Math.min(1000 * Math.pow(2, retryCount.current), 15000);
+    }
 
     function connect() {
       if (unmounted) return;
@@ -27,6 +33,7 @@ export function useMatchSocket(serverUrl: string | null) {
 
       ws.onopen = () => {
         if (!unmounted) {
+          retryCount.current = 0; // Reset backoff on successful connection
           setConnected(true);
           console.log("[Viewer] Connected to server");
         }
@@ -51,8 +58,10 @@ export function useMatchSocket(serverUrl: string | null) {
       ws.onclose = () => {
         if (!unmounted) {
           setConnected(false);
-          console.log("[Viewer] Disconnected. Reconnecting in 2s...");
-          reconnectTimer.current = setTimeout(connect, 2000);
+          const delay = getBackoffMs();
+          retryCount.current = Math.min(retryCount.current + 1, 5);
+          console.log(`[Viewer] Disconnected. Reconnecting in ${delay}ms...`);
+          reconnectTimer.current = setTimeout(connect, delay);
         }
       };
 

@@ -15,10 +15,17 @@ interface AgentThoughts {
   privateThought: string | null;
 }
 
+interface RobotBuild {
+  chassis: "light" | "medium" | "heavy";
+  arms: "short" | "standard" | "long";
+  weapon: "rapid" | "standard" | "heavy";
+}
+
 interface ViewerRobotFrame {
   position: [number, number, number];
   rotation: [number, number, number, number];
   armAngles: [number, number];
+  build?: RobotBuild;
 }
 
 interface ViewerFrame {
@@ -35,6 +42,7 @@ interface ReplayData {
   result: { winner: number | null; reason: string; finalTick: number };
   viewerFrames: ViewerFrame[];
   agentNames?: { A: string; B: string };
+  agentBuilds?: { A: RobotBuild; B: RobotBuild };
 }
 
 export default function ReplayPlayerPage() {
@@ -143,7 +151,7 @@ export default function ReplayPlayerPage() {
 
   return (
     <main className="relative w-screen h-screen bg-[#0a0a1a]">
-      <ReplayArena frame={currentFrame} />
+      <ReplayArena frame={currentFrame} agentBuilds={replay.agentBuilds} />
 
       {/* Top HUD */}
       <div className="absolute top-0 left-0 right-0 z-10 pointer-events-none">
@@ -183,9 +191,19 @@ export default function ReplayPlayerPage() {
         <div className="flex justify-between px-8 mt-2">
           <div className="bg-blue-600/60 backdrop-blur rounded-lg px-4 py-2">
             <span className="text-sm font-bold text-white">{nameA}</span>
+            {replay.agentBuilds?.A && (
+              <div className="text-[10px] text-blue-200/70 font-mono mt-0.5">
+                {replay.agentBuilds.A.chassis} / {replay.agentBuilds.A.arms} / {replay.agentBuilds.A.weapon}
+              </div>
+            )}
           </div>
           <div className="bg-red-600/60 backdrop-blur rounded-lg px-4 py-2">
             <span className="text-sm font-bold text-white">{nameB}</span>
+            {replay.agentBuilds?.B && (
+              <div className="text-[10px] text-red-200/70 font-mono mt-0.5">
+                {replay.agentBuilds.B.chassis} / {replay.agentBuilds.B.arms} / {replay.agentBuilds.B.weapon}
+              </div>
+            )}
           </div>
         </div>
       </div>

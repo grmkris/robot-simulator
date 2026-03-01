@@ -3,6 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+interface RobotBuild {
+  chassis: "light" | "medium" | "heavy";
+  arms: "short" | "standard" | "long";
+  weapon: "rapid" | "standard" | "heavy";
+}
+
 interface ReplaySummary {
   matchId: string;
   timestamp: string;
@@ -13,6 +19,7 @@ interface ReplaySummary {
   };
   frameCount: number;
   agentNames?: { A: string; B: string };
+  agentBuilds?: { A: RobotBuild; B: RobotBuild };
 }
 
 export default function ReplaysPage() {
@@ -22,7 +29,7 @@ export default function ReplaysPage() {
 
   useEffect(() => {
     // Fetch via viewer's proxy API route (avoids CORS)
-    fetch("/api/replays")
+    fetch("/api/replays", { signal: AbortSignal.timeout(8000) })
       .then((res) => res.json())
       .then((data) => {
         setReplays(data.summaries || []);
@@ -117,8 +124,18 @@ export default function ReplaysPage() {
                     {/* Matchup header */}
                     <div className="font-mono text-sm text-gray-400 mb-1">
                       <span className="text-blue-400">{nameA}</span>
+                      {replay.agentBuilds?.A && (
+                        <span className="text-blue-400/50 text-[10px] ml-1">
+                          ({replay.agentBuilds.A.chassis}/{replay.agentBuilds.A.arms}/{replay.agentBuilds.A.weapon})
+                        </span>
+                      )}
                       {" vs "}
                       <span className="text-red-400">{nameB}</span>
+                      {replay.agentBuilds?.B && (
+                        <span className="text-red-400/50 text-[10px] ml-1">
+                          ({replay.agentBuilds.B.chassis}/{replay.agentBuilds.B.arms}/{replay.agentBuilds.B.weapon})
+                        </span>
+                      )}
                     </div>
                     <div className="font-mono text-lg font-bold">
                       {replay.result.winner !== null ? (

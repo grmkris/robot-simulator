@@ -11,7 +11,10 @@ export async function GET(request: Request) {
     const serverUrl = getServerUrl();
     const params = new URLSearchParams({ limit });
     if (agent) params.set("agent", agent);
-    const res = await fetch(`${serverUrl}/api/match-history?${params}`, { cache: "no-store" });
+    const res = await fetch(`${serverUrl}/api/match-history?${params}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    });
     const data = await res.json();
     return NextResponse.json(data);
   } catch {
