@@ -3,40 +3,44 @@ function expectedScore(ratingA: number, ratingB: number): number {
   return 1 / (1 + Math.pow(10, (ratingB - ratingA) / 400));
 }
 
-/** Calculate new Elo rating after a match */
-function updateElo(
-  oldRating: number,
-  expected: number,
-  actual: number,
-): number {
+/**
+ * Compute Elo changes for a multi-player game using pairwise comparison.
+ *
+ * Each player is compared against every other player. The player with
+ * the better placement "wins" that pair.
+ *
+ * @param players - Array of { name, elo, placement }
+ * @returns Map of player name → elo change (delta)
+ */
+export function computeMultiplayerElo(
+  players: Array<{ name: string; elo: number; placement: number }>,
+): Map<string, number> {
   const K = 32;
-  return Math.round((oldRating + K * (actual - expected)) * 10) / 10;
-}
+  const n = players.length;
+  const changes = new Map<string, number>();
 
-/** Compute new Elo ratings for both agents after a match */
-export function computeEloChanges(
-  eloA: number,
-  eloB: number,
-  winner: 0 | 1 | null,
-): { newEloA: number; newEloB: number } {
-  const expA = expectedScore(eloA, eloB);
-  const expB = expectedScore(eloB, eloA);
+  if (n < 2) return changes;
 
-  let actualA: number;
-  let actualB: number;
-  if (winner === 0) {
-    actualA = 1;
-    actualB = 0;
-  } else if (winner === 1) {
-    actualA = 0;
-    actualB = 1;
-  } else {
-    actualA = 0.5;
-    actualB = 0.5;
+  for (const p of players) {
+    let totalDelta = 0;
+
+    for (const q of players) {
+      if (p.name === q.name) continue;
+
+      const expected = expectedScore(p.elo, q.elo);
+
+      let actual: number;
+      if (p.placement < q.placement) actual = 1;
+      else if (p.placement === q.placement) actual = 0.5;
+      else actual = 0;
+
+      totalDelta += K * (actual - expected);
+    }
+
+    // Average over opponents
+    const delta = Math.round((totalDelta / (n - 1)) * 10) / 10;
+    changes.set(p.name, delta);
   }
 
-  return {
-    newEloA: updateElo(eloA, expA, actualA),
-    newEloB: updateElo(eloB, expB, actualB),
-  };
+  return changes;
 }

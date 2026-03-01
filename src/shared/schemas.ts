@@ -1,119 +1,134 @@
 import { z } from "zod";
-import { Move } from "./types.js";
+import { Action, Direction, PickupKind, TileType } from "./types.js";
 
-// ── Primitives ──
+// ═══════════════════════════════════════════════
+// GridRoyale — Zod Schemas
+// ═══════════════════════════════════════════════
 
-export const Vec3Schema = z.object({
-  x: z.number(),
-  y: z.number(),
-  z: z.number(),
+// ── Enums ──
+
+export const DirectionSchema = z.nativeEnum(Direction);
+export const ActionSchema = z.nativeEnum(Action);
+export const PickupKindSchema = z.nativeEnum(PickupKind);
+export const TileTypeSchema = z.nativeEnum(TileType);
+export const GamePhaseSchema = z.enum(["lobby", "countdown", "active", "finished"]);
+
+// ── Intent ──
+
+export const IntentSchema = z.object({
+  action: ActionSchema,
+  dir: DirectionSchema.optional(),
+}).refine(
+  (val) => {
+    // MOVE, DASH, SHOOT require direction
+    if (val.action === Action.MOVE || val.action === Action.DASH || val.action === Action.SHOOT) {
+      return val.dir !== undefined;
+    }
+    return true;
+  },
+  { message: "MOVE, DASH, and SHOOT require a direction (dir)" },
+);
+
+// ── API Requests ──
+
+export const QueueRequestSchema = z.object({
+  name: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_-]+$/, "Name must be alphanumeric with _ or -"),
+  mode: z.literal("br_grid_v1").optional().default("br_grid_v1"),
 });
 
-export const QuatSchema = z.object({
-  x: z.number(),
-  y: z.number(),
-  z: z.number(),
-  w: z.number(),
+export const ActRequestSchema = z.object({
+  matchId: z.string().min(1),
+  action: z.object({
+    t: ActionSchema,
+    dir: DirectionSchema.optional(),
+  }),
+  applyTick: z.number().int().positive().optional(),
 });
 
-export const AgentIdSchema = z.union([z.literal(0), z.literal(1)]);
-
-// ── Robot Build ──
-
-export const ChassisTypeSchema = z.enum(["light", "medium", "heavy"]);
-export const ArmsTypeSchema = z.enum(["short", "standard", "long"]);
-export const WeaponTypeSchema = z.enum(["rapid", "standard", "heavy"]);
-
-export const RobotBuildSchema = z.object({
-  chassis: ChassisTypeSchema.optional().default("medium"),
-  arms: ArmsTypeSchema.optional().default("standard"),
-  weapon: WeaponTypeSchema.optional().default("standard"),
+export const StepRequestSchema = z.object({
+  matchId: z.string().optional(),
+  action: z.object({
+    t: ActionSchema,
+    dir: DirectionSchema.optional(),
+  }).optional(),
 });
 
-// ── Agent Action ──
-
-export const AgentActionSchema = z.object({
-  leftArmTarget: z.number().min(-1).max(1),
-  rightArmTarget: z.number().min(-1).max(1),
-  driveForce: z.number().min(-1).max(1).optional().default(0),
-  turnRate: z.number().min(-1).max(1).optional().default(0),
-  shoot: z.boolean().optional().default(false),
-  thought: z.string().max(200).optional(),
-  privateThought: z.string().max(200).optional(),
+export const LeaveRequestSchema = z.object({
+  matchId: z.string().optional(),
 });
 
-// ── Tactical Context ──
+// ── Observation Schema (for validation/documentation) ──
 
-export const TacticalContextSchema = z.object({
-  distanceToOpponent: z.number(),
-  myDistFromCenter: z.number(),
-  opponentDistFromCenter: z.number(),
-  closingSpeed: z.number(),
-  mySpeed: z.number(),
-  opponentSpeed: z.number(),
-  timeRemainingS: z.number(),
-  round: z.number().int(),
-  myFacingAngle: z.number(),
-  opponentFacingAngle: z.number(),
-  angleToOpponent: z.number(),
-  myCooldownS: z.number(),
-  opponentCooldownS: z.number(),
-  incomingProjectiles: z.number().int(),
-  myBuild: RobotBuildSchema.optional(),
-  opponentBuild: RobotBuildSchema.optional(),
+export const CooldownsSchema = z.object({
+  shoot: z.number().int().min(0),
+  dash: z.number().int().min(0),
+  pickup: z.number().int().min(0),
 });
 
-// ── Body / Arm / Robot State ──
-
-export const BodyStateSchema = z.object({
-  position: Vec3Schema,
-  rotation: QuatSchema,
-  linvel: Vec3Schema,
-  angvel: Vec3Schema,
+export const SelfSchema = z.object({
+  id: z.string(),
+  x: z.number().int(),
+  y: z.number().int(),
+  hp: z.number().int(),
+  shield: z.number().int(),
+  stamina: z.number().int(),
+  ammo: z.number().int(),
+  facing: DirectionSchema,
+  cooldowns: CooldownsSchema,
 });
 
-export const ArmStateSchema = z.object({
-  body: BodyStateSchema,
-  currentAngle: z.number(),
-  targetAngle: z.number(),
+export const ZoneSchema = z.object({
+  cx: z.number().int(),
+  cy: z.number().int(),
+  r: z.number().int(),
 });
 
-export const RobotStateSchema = z.object({
-  id: AgentIdSchema,
-  build: RobotBuildSchema.optional(),
-  chassis: BodyStateSchema,
-  leftArm: ArmStateSchema,
-  rightArm: ArmStateSchema,
-  isAlive: z.boolean(),
+export const VisibleEnemySchema = z.object({
+  id: z.string(),
+  x: z.number().int(),
+  y: z.number().int(),
+  hp: z.number().int(),
+  shield: z.number().int(),
 });
 
-export const MatchPhaseSchema = z.enum([
-  "waiting",
-  "countdown",
-  "active",
-  "finished",
-]);
-
-// ── 3-Step Program ──
-
-export const MoveSchema = z.nativeEnum(Move);
-export const ProgramSchema = z.tuple([MoveSchema, MoveSchema, MoveSchema]);
-
-export const ProgramActionSchema = z.object({
-  program: ProgramSchema,
-  thought: z.string().max(200).optional(),
-  privateThought: z.string().max(200).optional(),
+export const VisiblePickupSchema = z.object({
+  id: z.number().int(),
+  kind: PickupKindSchema,
+  x: z.number().int(),
+  y: z.number().int(),
 });
 
-// ── HTTP API Request Schemas ──
+export const VisibleProjectileSchema = z.object({
+  id: z.number().int(),
+  x: z.number().int(),
+  y: z.number().int(),
+  dir: DirectionSchema,
+});
 
-export const JoinRequestSchema = z.object({
-  name: z.string().min(1).max(32),
-  build: RobotBuildSchema.optional(),
-  room: z
-    .string()
-    .min(1)
-    .max(32)
-    .regex(/^[a-zA-Z0-9_-]+$/)
-    .optional(),
+export const VisibleTileSchema = z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+  t: TileTypeSchema,
+});
+
+export const GameEventSchema = z.object({
+  tick: z.number().int(),
+  type: z.enum(["DAMAGE", "KILL", "PICKUP", "ZONE_SHRINK", "SHOT", "DASH"]),
+  data: z.record(z.unknown()),
+});
+
+export const ObservationSchema = z.object({
+  matchId: z.string(),
+  tick: z.number().int(),
+  decisionIndex: z.number().int(),
+  self: SelfSchema,
+  zone: ZoneSchema,
+  visible: z.object({
+    tiles: z.array(VisibleTileSchema),
+    enemies: z.array(VisibleEnemySchema),
+    pickups: z.array(VisiblePickupSchema),
+    projectiles: z.array(VisibleProjectileSchema),
+  }),
+  recentEvents: z.array(GameEventSchema),
+  playersAlive: z.number().int(),
 });

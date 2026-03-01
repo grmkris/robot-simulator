@@ -1,308 +1,246 @@
-import type { RobotBuild } from "./builds.js";
-
 // ═══════════════════════════════════════════════
-// 3-Step Program Move System
+// GridRoyale — Core Types
 // ═══════════════════════════════════════════════
 
-/** All available discrete moves */
-export enum Move {
-  ADVANCE = "ADVANCE",
-  RETREAT = "RETREAT",
-  CIRCLE_LEFT = "CIRCLE_LEFT",
-  CIRCLE_RIGHT = "CIRCLE_RIGHT",
-  CHARGE = "CHARGE",
-  PUNCH_LEFT = "PUNCH_LEFT",
-  PUNCH_RIGHT = "PUNCH_RIGHT",
+// ── Coordinates ──
+
+export interface Vec2 {
+  x: number;
+  y: number;
+}
+
+// ── Enums ──
+
+export enum Direction {
+  N = "N",
+  E = "E",
+  S = "S",
+  W = "W",
+}
+
+export enum Action {
+  MOVE = "MOVE",
+  DASH = "DASH",
   SHOOT = "SHOOT",
-  GUARD = "GUARD",
-  DODGE_LEFT = "DODGE_LEFT",
-  DODGE_RIGHT = "DODGE_RIGHT",
+  PICKUP = "PICKUP",
+  NOOP = "NOOP",
 }
 
-/** A program is exactly 3 sequential moves */
-export type Program = [Move, Move, Move];
-
-/** Agent submission for one turn: a 3-step program */
-export interface ProgramAction {
-  program: Program;
-  thought?: string;
-  privateThought?: string;
+export enum TileType {
+  EMPTY = 0,
+  WALL = 1,
+  COVER = 2,
+  HAZARD = 3,
 }
 
-/** Predicted outcome of executing a move from current state */
-export interface MoveOutcome {
-  move: Move;
-  available: boolean;
-  predictedDistance: number;
-  predictedDistFromCenter: number;
-  note?: string;
+export enum PickupKind {
+  MEDKIT = "MEDKIT",
+  SHIELD = "SHIELD",
+  AMMO = "AMMO",
+  STAMINA = "STAMINA",
 }
 
-// ═══════════════════════════════════════════════
-// Physics & State Types
-// ═══════════════════════════════════════════════
+export type GamePhase = "lobby" | "countdown" | "active" | "finished";
 
-/** 3D vector — plain serializable object */
-export interface Vec3 {
-  x: number;
-  y: number;
-  z: number;
+// ── Direction Helpers ──
+
+export const DIRECTION_DELTAS: Record<Direction, Vec2> = {
+  [Direction.N]: { x: 0, y: -1 },
+  [Direction.E]: { x: 1, y: 0 },
+  [Direction.S]: { x: 0, y: 1 },
+  [Direction.W]: { x: -1, y: 0 },
+};
+
+// ── Intent (what a bot submits) ──
+
+export interface Intent {
+  action: Action;
+  dir?: Direction;
 }
 
-/** Quaternion rotation */
-export interface Quat {
-  x: number;
-  y: number;
-  z: number;
-  w: number;
+// ── Player State ──
+
+export interface Cooldowns {
+  shoot: number;
+  dash: number;
+  pickup: number;
 }
 
-/** Rigid body state snapshot (serializable) */
-export interface BodyState {
-  position: Vec3;
-  rotation: Quat;
-  linvel: Vec3;
-  angvel: Vec3;
-}
-
-/** Per-arm state */
-export interface ArmState {
-  body: BodyState;
-  currentAngle: number; // radians, actual joint angle
-  targetAngle: number; // normalized [-1, 1]
-}
-
-/** Complete robot state for one agent */
-export interface RobotState {
-  id: AgentId;
-  build: RobotBuild;
-  chassis: BodyState;
-  leftArm: ArmState;
-  rightArm: ArmState;
-  isAlive: boolean;
-}
-
-/** An action submitted by an agent */
-export interface AgentAction {
-  leftArmTarget: number; // [-1, 1] arm swing
-  rightArmTarget: number; // [-1, 1] arm swing
-  /** Forward/backward thrust in facing direction. -1 = full reverse, 1 = full forward */
-  driveForce?: number;
-  /** Yaw rotation. -1 = turn left, 1 = turn right */
-  turnRate?: number;
-  /** Fire a knockback projectile (3s cooldown) */
-  shoot?: boolean;
-  /** Public thought — visible to opponent AND spectators (for mind games) */
-  thought?: string;
-  /** Private thought — visible to spectators ONLY (inner monologue) */
-  privateThought?: string;
-}
-
-/** Projectile state snapshot */
-export interface ProjectileState {
-  id: number;
-  ownerId: AgentId;
-  position: Vec3;
-  velocity: Vec3;
-  ticksRemaining: number;
-}
-
-/** Compact projectile for viewer/replay */
-export interface ViewerProjectileState {
-  position: [number, number, number];
-  ownerId: 0 | 1;
-}
-
-/** Pre-computed tactical summary for LLM agents */
-export interface TacticalContext {
-  distanceToOpponent: number;
-  myDistFromCenter: number;
-  opponentDistFromCenter: number;
-  closingSpeed: number;
-  mySpeed: number;
-  opponentSpeed: number;
-  timeRemainingS: number;
-  round: number;
-  /** My chassis facing angle in radians (0 = +Z axis) */
-  myFacingAngle: number;
-  /** Opponent facing angle in radians */
-  opponentFacingAngle: number;
-  /** Angle from my facing direction to opponent position (radians, + = right, - = left) */
-  angleToOpponent: number;
-  /** Seconds until I can shoot again (0 = ready) */
-  myCooldownS: number;
-  /** Seconds until opponent can shoot again (0 = ready) */
-  opponentCooldownS: number;
-  /** Number of projectiles currently heading toward me */
-  incomingProjectiles: number;
-  /** My robot build */
-  myBuild: RobotBuild;
-  /** Opponent's robot build */
-  opponentBuild: RobotBuild;
-  /** Available moves with predicted outcomes */
-  availableMoves: MoveOutcome[];
-}
-
-/** Agent thought state for viewer/replay */
-export interface AgentThoughts {
-  thought: string | null;
-  privateThought: string | null;
-}
-
-/** Full world snapshot at a given tick */
-export interface WorldState {
-  tick: number;
-  elapsed: number; // seconds since match start
-  robots: [RobotState, RobotState];
-  projectiles: ProjectileState[];
-  matchPhase: MatchPhase;
-}
-
-/** Agent identifier: 0 or 1 */
-export type AgentId = 0 | 1;
-
-/** Match lifecycle phases */
-export type MatchPhase = "waiting" | "countdown" | "active" | "finished";
-
-/** Match outcome */
-export interface MatchResult {
-  winner: AgentId | null; // null = draw
-  reason: "ring_out" | "timeout" | "disconnect";
-  finalTick: number;
-}
-
-/** Viewer-optimized state (sent at VIEWER_BROADCAST_RATE) */
-export interface ViewerRobotState {
+export interface PlayerState {
   id: string;
-  build?: RobotBuild;
-  position: [number, number, number];
-  rotation: [number, number, number, number];
-  armAngles: [number, number];
+  name: string;
+  x: number;
+  y: number;
+  hp: number;
+  shield: number;
+  stamina: number;
+  ammo: number;
+  facing: Direction;
+  cooldowns: Cooldowns;
+  alive: boolean;
+  kills: number;
+  /** Tick the player died on (for placement ordering) */
+  deathTick: number | null;
 }
 
-export interface ViewerState {
-  type: "state";
+// ── Projectile ──
+
+export interface Projectile {
+  id: number;
+  ownerId: string;
+  x: number;
+  y: number;
+  dir: Direction;
+  ttl: number;
+}
+
+// ── Pickup ──
+
+export interface Pickup {
+  id: number;
+  kind: PickupKind;
+  x: number;
+  y: number;
+}
+
+// ── Zone ──
+
+export interface ZoneState {
+  cx: number;
+  cy: number;
+  /** Radius — distance from center. Tiles with max(|dx|,|dy|) > r are outside */
+  r: number;
+  nextShrinkTick: number;
+  phase: number;
+}
+
+// ── Grid Map ──
+
+export interface GridMap {
+  width: number;
+  height: number;
+  tiles: Uint8Array;
+}
+
+// ── Game Events ──
+
+export type GameEventType =
+  | "DAMAGE"
+  | "KILL"
+  | "PICKUP"
+  | "ZONE_SHRINK"
+  | "SHOT"
+  | "DASH";
+
+export interface GameEvent {
   tick: number;
-  time: number;
-  robots: [ViewerRobotState, ViewerRobotState];
-  matchPhase: MatchPhase;
-  /** Active projectiles */
-  projectiles?: ViewerProjectileState[];
-  /** Agent thoughts for Mind Games mode */
-  thoughts?: {
-    A: AgentThoughts;
-    B: AgentThoughts;
-  };
-  /** Current decision round */
-  round?: number;
-  /** Current step in the 3-step program (1, 2, 3, or 0 for between turns) */
-  programStep?: number;
-  /** Current moves being executed */
-  currentMoves?: { A: string | null; B: string | null };
-  /** Agent names */
-  agentNames?: { A: string; B: string };
-  /** Robot builds */
-  builds?: { A: RobotBuild; B: RobotBuild };
+  type: GameEventType;
+  data: Record<string, unknown>;
 }
 
-// ═══════════════════════════════════════════════
-// HTTP Agent API Response Types
-// ═══════════════════════════════════════════════
+// ── Full Game State (server-side, omniscient) ──
 
-/** Response from POST /api/join */
-export interface JoinResponse {
-  token: string;
-  position: number;
-  build: RobotBuild;
-  config: {
-    arenaRadius: number;
-    tickRate: number;
-    matchDurationS: number;
-  };
-}
-
-/** Response from GET /api/game-state */
-export interface GameStateResponse {
-  status: "waiting" | "queued" | "countdown" | "active" | "finished";
-  tick?: number;
-  elapsed?: number;
-  you?: AgentId;
-  robots?: [RobotState, RobotState];
-  projectiles?: ProjectileState[];
-  matchPhase?: MatchPhase;
-  tactical?: TacticalContext;
-  yourLastProgram?: Program | null;
-  opponentLastProgram?: Program | null;
-  opponentLastThought?: string | null;
-  currentStep?: number;
-  // Build info
-  myBuild?: RobotBuild;
-  opponentBuild?: RobotBuild;
-  // Queue info (when status = "queued")
-  position?: number;
-  queueSize?: number;
-  room?: string;
-  // Turn-based state
-  turn?: number;
-  awaitingAction?: boolean;
-  // Finished state
-  winner?: AgentId | null;
-  reason?: string;
-  message?: string;
-}
-
-/** Response from POST /api/action */
-export interface ActionResponse {
-  ok: boolean;
+export interface GameState {
   tick: number;
-  turn: number;
-  programReceived: Program;
+  seed: number;
+  map: GridMap;
+  players: Map<string, PlayerState>;
+  projectiles: Projectile[];
+  pickups: Pickup[];
+  zone: ZoneState;
+  phase: GamePhase;
+  events: GameEvent[];
+  nextProjectileId: number;
+  nextPickupId: number;
 }
 
-// ═══════════════════════════════════════════════
-// Lobby / Leaderboard Types
-// ═══════════════════════════════════════════════
+// ── Observation (fog-filtered, per-player, per spec section 11) ──
 
-/** Leaderboard entry for a single agent */
+export interface Observation {
+  matchId: string;
+  tick: number;
+  decisionIndex: number;
+  self: {
+    id: string;
+    x: number;
+    y: number;
+    hp: number;
+    shield: number;
+    stamina: number;
+    ammo: number;
+    facing: Direction;
+    cooldowns: Cooldowns;
+  };
+  zone: {
+    cx: number;
+    cy: number;
+    r: number;
+  };
+  visible: {
+    tiles: Array<{ x: number; y: number; t: TileType }>;
+    enemies: Array<{
+      id: string;
+      x: number;
+      y: number;
+      hp: number;
+      shield: number;
+    }>;
+    pickups: Array<{ id: number; kind: PickupKind; x: number; y: number }>;
+    projectiles: Array<{
+      id: number;
+      x: number;
+      y: number;
+      dir: Direction;
+    }>;
+  };
+  recentEvents: GameEvent[];
+  playersAlive: number;
+}
+
+// ── Match Result ──
+
+export interface Placement {
+  playerId: string;
+  name: string;
+  placement: number;
+  kills: number;
+}
+
+export interface GameResult {
+  winnerId: string | null;
+  reason: "last_standing" | "zone_collapse" | "timeout";
+  placements: Placement[];
+  totalTicks: number;
+  seed: number;
+}
+
+// ── Intent Log Entry (for replay) ──
+
+export interface IntentLogEntry {
+  tick: number;
+  playerId: string;
+  intent: Intent;
+}
+
+// ── Leaderboard / History ──
+
 export interface LeaderboardEntry {
   agentName: string;
   displayName: string;
   wins: number;
   losses: number;
-  draws: number;
   elo: number;
   matches: number;
   winRate: number;
+  avgPlacement: number;
 }
 
-/** Match history entry */
 export interface MatchHistoryEntry {
-  matchId: string;
+  gameId: string;
   timestamp: string;
-  agentA: string;
-  agentB: string;
-  winner: AgentId | null;
+  playerCount: number;
+  winnerId: string | null;
+  winnerName: string | null;
   reason: string;
   durationS: number;
-}
-
-/** Queue entry visible to viewers */
-export interface QueueEntry {
-  name: string;
-  position: number;
-  build: RobotBuild;
-}
-
-/** Lobby state broadcast to spectators */
-export interface LobbyState {
-  type: "lobby";
-  queue: QueueEntry[];
-  currentMatch: {
-    agentA: string;
-    agentB: string;
-    phase: MatchPhase;
-    tick: number;
-    time: number;
-  } | null;
-  roomsWaiting?: number;
 }

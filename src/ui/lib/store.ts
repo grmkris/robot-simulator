@@ -1,113 +1,113 @@
 import { create } from "zustand";
 import type {
-  ViewerRobotState,
-  ViewerProjectileState,
+  ViewerPlayer,
+  ViewerProjectile,
+  ViewerPickup,
+  ViewerZone,
+  ViewerKillEvent,
   ViewerStateMessage,
-  MatchEndMessage,
-  LobbyStateMessage,
-  AgentThoughts,
-  RobotBuild,
+  ViewerLobbyMessage,
+  ViewerGameOverMessage,
+  GamePhase,
 } from "./types";
 
-interface ArenaStore {
+interface GridRoyaleStore {
   connected: boolean;
   setConnected: (v: boolean) => void;
 
+  // Game state
   tick: number;
-  time: number;
-  matchPhase: "waiting" | "countdown" | "active" | "finished" | "disconnected";
-  robots: [ViewerRobotState, ViewerRobotState] | null;
+  phase: GamePhase;
+  players: ViewerPlayer[];
+  projectiles: ViewerProjectile[];
+  pickups: ViewerPickup[];
+  zone: ViewerZone;
+  killFeed: ViewerKillEvent[];
+  playersAlive: number;
 
-  winner: 0 | 1 | null;
+  // Game over
+  winnerId: string | null;
+  winnerName: string | null;
   winReason: string | null;
+  placements: ViewerGameOverMessage["placements"];
 
-  prevRobots: [ViewerRobotState, ViewerRobotState] | null;
+  // Lobby
+  lobbyPlayers: Array<{ name: string; ready: boolean }>;
+  countdown: number | null;
 
-  projectiles: ViewerProjectileState[];
-
-  thoughts: { A: AgentThoughts; B: AgentThoughts } | null;
-  round: number;
-  programStep: number;
-  currentMoves: { A: string | null; B: string | null } | null;
-  agentNames: { A: string; B: string };
-  builds: { A: RobotBuild; B: RobotBuild } | null;
-
-  queue: Array<{ name: string; position: number; build?: RobotBuild }>;
-  currentMatch: LobbyStateMessage["currentMatch"];
-
+  // Actions
   updateState: (msg: ViewerStateMessage) => void;
-  setMatchEnd: (msg: MatchEndMessage) => void;
-  updateLobby: (msg: LobbyStateMessage) => void;
+  updateLobby: (msg: ViewerLobbyMessage) => void;
+  setGameOver: (msg: ViewerGameOverMessage) => void;
   reset: () => void;
 }
 
-export const useArenaStore = create<ArenaStore>((set) => ({
+const INITIAL_ZONE: ViewerZone = { cx: 20, cy: 20, r: 20 };
+
+export const useArenaStore = create<GridRoyaleStore>((set) => ({
   connected: false,
   setConnected: (v) => set({ connected: v }),
 
   tick: 0,
-  time: 0,
-  matchPhase: "disconnected",
-  robots: null,
-  winner: null,
-  winReason: null,
-  prevRobots: null,
+  phase: "lobby",
+  players: [],
   projectiles: [],
-  thoughts: null,
-  round: 0,
-  programStep: 0,
-  currentMoves: null,
-  agentNames: { A: "Robot A", B: "Robot B" },
-  builds: null,
-  queue: [],
-  currentMatch: null,
+  pickups: [],
+  zone: INITIAL_ZONE,
+  killFeed: [],
+  playersAlive: 0,
+
+  winnerId: null,
+  winnerName: null,
+  winReason: null,
+  placements: [],
+
+  lobbyPlayers: [],
+  countdown: null,
 
   updateState: (msg) =>
-    set((state) => ({
-      tick: msg.tick,
-      time: msg.time,
-      matchPhase: msg.matchPhase,
-      prevRobots: state.robots,
-      robots: msg.robots,
-      projectiles: msg.projectiles ?? [],
-      thoughts: msg.thoughts ?? state.thoughts,
-      round: msg.round ?? state.round,
-      programStep: msg.programStep ?? 0,
-      currentMoves: msg.currentMoves ?? null,
-      agentNames: msg.agentNames ?? state.agentNames,
-      builds: msg.builds ?? state.builds,
-    })),
-
-  setMatchEnd: (msg) =>
     set({
-      matchPhase: "finished",
-      winner: msg.winner,
-      winReason: msg.reason,
+      tick: msg.tick,
+      phase: msg.phase,
+      players: msg.players,
+      projectiles: msg.projectiles,
+      pickups: msg.pickups,
+      zone: msg.zone,
+      killFeed: msg.killFeed,
+      playersAlive: msg.playersAlive,
     }),
 
   updateLobby: (msg) =>
     set({
-      queue: msg.queue,
-      currentMatch: msg.currentMatch,
+      lobbyPlayers: msg.players,
+      countdown: msg.countdown,
+      phase: msg.phase,
+    }),
+
+  setGameOver: (msg) =>
+    set({
+      phase: "finished",
+      winnerId: msg.winnerId,
+      winnerName: msg.winnerName,
+      winReason: msg.reason,
+      placements: msg.placements,
     }),
 
   reset: () =>
     set({
       tick: 0,
-      time: 0,
-      matchPhase: "disconnected",
-      robots: null,
-      winner: null,
-      winReason: null,
-      prevRobots: null,
+      phase: "lobby",
+      players: [],
       projectiles: [],
-      thoughts: null,
-      round: 0,
-      programStep: 0,
-      currentMoves: null,
-      agentNames: { A: "Robot A", B: "Robot B" },
-      builds: null,
-      queue: [],
-      currentMatch: null,
+      pickups: [],
+      zone: INITIAL_ZONE,
+      killFeed: [],
+      playersAlive: 0,
+      winnerId: null,
+      winnerName: null,
+      winReason: null,
+      placements: [],
+      lobbyPlayers: [],
+      countdown: null,
     }),
 }));

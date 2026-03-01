@@ -9,14 +9,15 @@ function getWsUrl(): string {
 }
 
 /**
- * Connects to the arena server's spectator WebSocket.
+ * Connects to the GridRoyale server's spectator WebSocket.
  * Automatically reconnects on disconnect with exponential backoff.
  */
 export function useMatchSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCount = useRef(0);
-  const { setConnected, updateState, setMatchEnd, updateLobby, reset } = useArenaStore();
+  const { setConnected, updateState, setGameOver, updateLobby, reset } =
+    useArenaStore();
 
   useEffect(() => {
     let unmounted = false;
@@ -46,8 +47,8 @@ export function useMatchSocket() {
           const msg = JSON.parse(event.data) as ServerViewerMessage;
           if (msg.type === "state") {
             updateState(msg);
-          } else if (msg.type === "match_end") {
-            setMatchEnd(msg);
+          } else if (msg.type === "game_over") {
+            setGameOver(msg);
           } else if (msg.type === "lobby") {
             updateLobby(msg);
           }
@@ -79,5 +80,5 @@ export function useMatchSocket() {
       wsRef.current?.close();
       reset();
     };
-  }, [setConnected, updateState, setMatchEnd, updateLobby, reset]);
+  }, [setConnected, updateState, setGameOver, updateLobby, reset]);
 }

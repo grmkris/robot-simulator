@@ -9,8 +9,8 @@ export default function LeaderboardPage() {
   useEffect(() => {
     fetch("/api/leaderboard", { signal: AbortSignal.timeout(8000) })
       .then((r) => r.json())
-      .then((d) => {
-        setLeaderboard(d.leaderboard ?? []);
+      .then((data) => {
+        setLeaderboard(Array.isArray(data) ? data : []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -68,59 +68,61 @@ export default function LeaderboardPage() {
         ) : (
           <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
             {/* Table header */}
-            <div className="grid grid-cols-[3rem_1fr_4rem_4rem_4rem_4rem_4rem_4rem] gap-2 px-4 py-3 bg-gray-900/80 border-b border-gray-800 text-xs text-gray-500 font-mono uppercase">
+            <div className="grid grid-cols-[3rem_1fr_4rem_4rem_4rem_4rem_4rem] gap-2 px-4 py-3 bg-gray-900/80 border-b border-gray-800 text-xs text-gray-500 font-mono uppercase">
               <div className="text-right">#</div>
               <div>Agent</div>
               <div className="text-right">Elo</div>
               <div className="text-right">W</div>
               <div className="text-right">L</div>
-              <div className="text-right">D</div>
               <div className="text-right">Total</div>
               <div className="text-right">Win%</div>
             </div>
 
             {/* Table rows */}
-            {leaderboard.map((entry) => (
-              <div
-                key={entry.agentName}
-                className="grid grid-cols-[3rem_1fr_4rem_4rem_4rem_4rem_4rem_4rem] gap-2 px-4 py-3 border-b border-gray-800/50 hover:bg-white/5 transition-colors items-center"
-              >
+            {leaderboard.map((entry, idx) => {
+              const rank = idx + 1;
+              const winRate = entry.gamesPlayed > 0
+                ? Math.round((entry.wins / entry.gamesPlayed) * 100)
+                : 0;
+              return (
                 <div
-                  className={`text-right font-bold ${
-                    entry.rank === 1
-                      ? "text-yellow-400"
-                      : entry.rank === 2
-                        ? "text-gray-300"
-                        : entry.rank === 3
-                          ? "text-amber-600"
-                          : "text-gray-500"
-                  }`}
+                  key={entry.name}
+                  className="grid grid-cols-[3rem_1fr_4rem_4rem_4rem_4rem_4rem] gap-2 px-4 py-3 border-b border-gray-800/50 hover:bg-white/5 transition-colors items-center"
                 >
-                  {entry.rank}
+                  <div
+                    className={`text-right font-bold ${
+                      rank === 1
+                        ? "text-yellow-400"
+                        : rank === 2
+                          ? "text-gray-300"
+                          : rank === 3
+                            ? "text-amber-600"
+                            : "text-gray-500"
+                    }`}
+                  >
+                    {rank}
+                  </div>
+                  <div className="text-white font-medium truncate">
+                    {entry.name}
+                  </div>
+                  <div className="text-right text-white font-mono font-bold">
+                    {Math.round(entry.elo)}
+                  </div>
+                  <div className="text-right text-green-400 font-mono">
+                    {entry.wins}
+                  </div>
+                  <div className="text-right text-red-400 font-mono">
+                    {entry.losses}
+                  </div>
+                  <div className="text-right text-gray-400 font-mono">
+                    {entry.gamesPlayed}
+                  </div>
+                  <div className="text-right text-gray-300 font-mono">
+                    {winRate}%
+                  </div>
                 </div>
-                <div className="text-white font-medium truncate">
-                  {entry.displayName}
-                </div>
-                <div className="text-right text-white font-mono font-bold">
-                  {Math.round(entry.elo)}
-                </div>
-                <div className="text-right text-green-400 font-mono">
-                  {entry.wins}
-                </div>
-                <div className="text-right text-red-400 font-mono">
-                  {entry.losses}
-                </div>
-                <div className="text-right text-yellow-400 font-mono">
-                  {entry.draws}
-                </div>
-                <div className="text-right text-gray-400 font-mono">
-                  {entry.matches}
-                </div>
-                <div className="text-right text-gray-300 font-mono">
-                  {entry.winRate}%
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

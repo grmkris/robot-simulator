@@ -1,90 +1,96 @@
-/** Viewer-side types for arena state received via WebSocket */
+/** Viewer-side types for grid arena state received via WebSocket */
 
-export interface RobotBuild {
-  chassis: "light" | "medium" | "heavy";
-  arms: "short" | "standard" | "long";
-  weapon: "rapid" | "standard" | "heavy";
-}
+import type { Direction, PickupKind, GamePhase } from "../../shared/types.js";
 
-export interface ViewerRobotState {
+export type { Direction, PickupKind, GamePhase };
+
+// ── Viewer State Types ──
+
+export interface ViewerPlayer {
   id: string;
-  build?: RobotBuild;
-  position: [number, number, number];
-  rotation: [number, number, number, number]; // quaternion xyzw
-  armAngles: [number, number]; // [left, right]
+  name: string;
+  x: number;
+  y: number;
+  hp: number;
+  shield: number;
+  stamina: number;
+  ammo: number;
+  facing: Direction;
+  alive: boolean;
+  kills: number;
 }
 
-/** Projectile state for viewer rendering */
-export interface ViewerProjectileState {
-  position: [number, number, number];
-  ownerId: 0 | 1;
+export interface ViewerProjectile {
+  id: number;
+  ownerId: string;
+  x: number;
+  y: number;
+  dir: Direction;
 }
 
-/** Agent thoughts for Mind Games mode */
-export interface AgentThoughts {
-  thought: string | null;
-  privateThought: string | null;
+export interface ViewerPickup {
+  id: number;
+  kind: PickupKind;
+  x: number;
+  y: number;
 }
+
+export interface ViewerZone {
+  cx: number;
+  cy: number;
+  r: number;
+}
+
+export interface ViewerKillEvent {
+  tick: number;
+  killerId: string | null;
+  victimId: string;
+  victimName: string;
+  killerName: string | null;
+  weapon: "projectile" | "zone";
+}
+
+// ── WebSocket Messages ──
 
 export interface ViewerStateMessage {
   type: "state";
   tick: number;
-  time: number;
-  robots: [ViewerRobotState, ViewerRobotState];
-  matchPhase: "waiting" | "countdown" | "active" | "finished";
-  projectiles?: ViewerProjectileState[];
-  thoughts?: {
-    A: AgentThoughts;
-    B: AgentThoughts;
-  };
-  round?: number;
-  programStep?: number;
-  currentMoves?: { A: string | null; B: string | null };
-  agentNames?: { A: string; B: string };
-  builds?: { A: RobotBuild; B: RobotBuild };
+  phase: GamePhase;
+  players: ViewerPlayer[];
+  projectiles: ViewerProjectile[];
+  pickups: ViewerPickup[];
+  zone: ViewerZone;
+  killFeed: ViewerKillEvent[];
+  playersAlive: number;
 }
 
-export interface MatchEndMessage {
-  type: "match_end";
-  winner: 0 | 1 | null;
-  reason: "ring_out" | "timeout" | "disconnect";
-}
-
-/** Lobby state broadcast by server */
-export interface LobbyStateMessage {
+export interface ViewerLobbyMessage {
   type: "lobby";
-  queue: Array<{ name: string; position: number; build?: RobotBuild }>;
-  currentMatch: {
-    agentA: string;
-    agentB: string;
-    phase: string;
-    tick: number;
-    time: number;
-  } | null;
+  players: Array<{ name: string; ready: boolean }>;
+  countdown: number | null;
+  phase: GamePhase;
 }
+
+export interface ViewerGameOverMessage {
+  type: "game_over";
+  winnerId: string | null;
+  winnerName: string | null;
+  reason: string;
+  placements: Array<{
+    playerId: string;
+    name: string;
+    placement: number;
+    kills: number;
+  }>;
+}
+
+export type ServerViewerMessage = ViewerStateMessage | ViewerLobbyMessage | ViewerGameOverMessage;
 
 /** Leaderboard entry from REST API */
 export interface LeaderboardEntry {
-  rank: number;
-  agentName: string;
-  displayName: string;
+  name: string;
+  elo: number;
   wins: number;
   losses: number;
-  draws: number;
-  elo: number;
-  matches: number;
-  winRate: number;
+  gamesPlayed: number;
 }
-
-/** Match history entry from REST API */
-export interface MatchHistoryEntry {
-  matchId: string;
-  timestamp: string;
-  agentA: string;
-  agentB: string;
-  winner: 0 | 1 | null;
-  reason: string;
-  durationS: number;
-}
-
-export type ServerViewerMessage = ViewerStateMessage | MatchEndMessage | LobbyStateMessage;

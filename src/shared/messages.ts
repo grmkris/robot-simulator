@@ -1,100 +1,107 @@
 import { z } from "zod";
-import {
-  AgentActionSchema,
-  AgentIdSchema,
-  RobotStateSchema,
-  MatchPhaseSchema,
-  TacticalContextSchema,
-} from "./schemas.js";
+import { DirectionSchema, GamePhaseSchema, PickupKindSchema } from "./schemas.js";
 
 // ═══════════════════════════════════════════════
-// Server → Agent Messages
+// GridRoyale — WebSocket Messages (Viewer)
 // ═══════════════════════════════════════════════
 
-export const WelcomeMessageSchema = z.object({
-  type: z.literal("welcome"),
-  protocolVersion: z.number().int(),
-  agentId: AgentIdSchema,
-  arenaRadius: z.number(),
-  tickRate: z.number(),
-  decisionRate: z.number().optional(),
+// ── Viewer State (full omniscient, sent at VIEWER_FPS) ──
+
+export const ViewerPlayerSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  x: z.number().int(),
+  y: z.number().int(),
+  hp: z.number().int(),
+  shield: z.number().int(),
+  stamina: z.number().int(),
+  ammo: z.number().int(),
+  facing: DirectionSchema,
+  alive: z.boolean(),
+  kills: z.number().int(),
 });
 
-export const TickMessageSchema = z.object({
-  type: z.literal("tick"),
+export const ViewerProjectileSchema = z.object({
+  id: z.number().int(),
+  ownerId: z.string(),
+  x: z.number().int(),
+  y: z.number().int(),
+  dir: DirectionSchema,
+});
+
+export const ViewerPickupSchema = z.object({
+  id: z.number().int(),
+  kind: PickupKindSchema,
+  x: z.number().int(),
+  y: z.number().int(),
+});
+
+export const ViewerZoneSchema = z.object({
+  cx: z.number().int(),
+  cy: z.number().int(),
+  r: z.number().int(),
+});
+
+export const ViewerKillEventSchema = z.object({
   tick: z.number().int(),
-  you: AgentIdSchema,
-  robots: z.tuple([RobotStateSchema, RobotStateSchema]),
-  matchPhase: MatchPhaseSchema,
+  killerId: z.string().nullable(),
+  victimId: z.string(),
+  victimName: z.string(),
+  killerName: z.string().nullable(),
+  weapon: z.enum(["projectile", "zone"]),
 });
 
-export const DecisionWindowMessageSchema = z.object({
-  type: z.literal("decision_window"),
-  round: z.number().int(),
+// ── Server → Viewer Messages ──
+
+export const ViewerStateMessageSchema = z.object({
+  type: z.literal("state"),
   tick: z.number().int(),
-  you: AgentIdSchema,
-  robots: z.tuple([RobotStateSchema, RobotStateSchema]),
-  matchPhase: MatchPhaseSchema,
-  tactical: TacticalContextSchema,
-  yourLastAction: AgentActionSchema,
-  opponentLastThought: z.string().nullable(),
-  deadline_ms: z.number(),
+  phase: GamePhaseSchema,
+  players: z.array(ViewerPlayerSchema),
+  projectiles: z.array(ViewerProjectileSchema),
+  pickups: z.array(ViewerPickupSchema),
+  zone: ViewerZoneSchema,
+  killFeed: z.array(ViewerKillEventSchema),
+  playersAlive: z.number().int(),
 });
 
-export const MatchEndMessageSchema = z.object({
-  type: z.literal("match_end"),
-  winner: AgentIdSchema.nullable(),
-  reason: z.enum(["ring_out", "timeout", "disconnect"]),
+export const ViewerLobbyMessageSchema = z.object({
+  type: z.literal("lobby"),
+  players: z.array(z.object({
+    name: z.string(),
+    ready: z.boolean(),
+  })),
+  countdown: z.number().nullable(),
+  phase: GamePhaseSchema,
 });
 
-export const ErrorMessageSchema = z.object({
-  type: z.literal("error"),
-  message: z.string(),
+export const ViewerGameOverMessageSchema = z.object({
+  type: z.literal("game_over"),
+  winnerId: z.string().nullable(),
+  winnerName: z.string().nullable(),
+  reason: z.string(),
+  placements: z.array(z.object({
+    playerId: z.string(),
+    name: z.string(),
+    placement: z.number().int(),
+    kills: z.number().int(),
+  })),
 });
 
-// ═══════════════════════════════════════════════
-// Agent → Server Messages
-// ═══════════════════════════════════════════════
-
-export const JoinMessageSchema = z.object({
-  type: z.literal("join"),
-  name: z.string().min(1).max(32),
-});
-
-export const ActionMessageSchema = z.object({
-  type: z.literal("action"),
-  tick: z.number().int().optional(),
-  round: z.number().int().optional(),
-  action: AgentActionSchema,
-});
-
-// ═══════════════════════════════════════════════
-// Discriminated Unions
-// ═══════════════════════════════════════════════
-
-export const ServerMessageSchema = z.discriminatedUnion("type", [
-  WelcomeMessageSchema,
-  TickMessageSchema,
-  DecisionWindowMessageSchema,
-  MatchEndMessageSchema,
-  ErrorMessageSchema,
+export const ViewerMessageSchema = z.discriminatedUnion("type", [
+  ViewerStateMessageSchema,
+  ViewerLobbyMessageSchema,
+  ViewerGameOverMessageSchema,
 ]);
 
-export const ClientMessageSchema = z.discriminatedUnion("type", [
-  JoinMessageSchema,
-  ActionMessageSchema,
-]);
+// ── Inferred Types ──
 
-// ═══════════════════════════════════════════════
-// Inferred Types
-// ═══════════════════════════════════════════════
-
-export type ServerMessage = z.infer<typeof ServerMessageSchema>;
-export type ClientMessage = z.infer<typeof ClientMessageSchema>;
-export type WelcomeMessage = z.infer<typeof WelcomeMessageSchema>;
-export type TickMessage = z.infer<typeof TickMessageSchema>;
-export type DecisionWindowMessage = z.infer<typeof DecisionWindowMessageSchema>;
-export type MatchEndMessage = z.infer<typeof MatchEndMessageSchema>;
-export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
-export type JoinMessage = z.infer<typeof JoinMessageSchema>;
-export type ActionMessage = z.infer<typeof ActionMessageSchema>;
+export type ViewerPlayer = z.infer<typeof ViewerPlayerSchema>;
+export type ViewerProjectile = z.infer<typeof ViewerProjectileSchema>;
+export type ViewerPickup = z.infer<typeof ViewerPickupSchema>;
+export type ViewerZone = z.infer<typeof ViewerZoneSchema>;
+export type ViewerKillEvent = z.infer<typeof ViewerKillEventSchema>;
+export type ViewerStateMessage = z.infer<typeof ViewerStateMessageSchema>;
+export type ViewerLobbyMessage = z.infer<typeof ViewerLobbyMessageSchema>;
+export type ViewerGameOverMessage = z.infer<typeof ViewerGameOverMessageSchema>;
+export type ViewerMessage = z.infer<typeof ViewerMessageSchema>;

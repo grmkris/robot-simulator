@@ -1,32 +1,28 @@
-import { lazy, Suspense } from "react";
 import { useMatchSocket } from "../hooks/useMatchSocket";
 import { useArenaStore } from "../lib/store";
-import { MatchHUD } from "../components/MatchHUD";
-import { ThoughtBubbles } from "../components/ThoughtBubbles";
+import { GridCanvas } from "../components/GridCanvas";
+import { GameHUD } from "../components/GameHUD";
 import { LobbyView } from "../components/LobbyView";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 
-const Arena3D = lazy(() =>
-  import("../components/Arena3D").then((mod) => ({ default: mod.Arena3D }))
-);
-
 export default function ArenaPage() {
-  const matchPhase = useArenaStore((s) => s.matchPhase);
+  const phase = useArenaStore((s) => s.phase);
 
   useMatchSocket();
 
-  const showLobby = matchPhase === "waiting" || matchPhase === "disconnected";
-  const showArena = !showLobby;
+  const showLobby = phase === "lobby";
+  const showGame = phase === "countdown" || phase === "active" || phase === "finished";
 
   return (
     <ErrorBoundary>
-      <main className="relative w-screen h-screen bg-[#0a0a1a]">
-        <MatchHUD />
-        {showLobby ? <LobbyView /> : <ThoughtBubbles />}
-        {showArena && (
-          <Suspense fallback={null}>
-            <Arena3D />
-          </Suspense>
+      <main className="relative w-screen h-screen bg-[#0a0a1a] flex items-center justify-center overflow-hidden">
+        {showLobby && <LobbyView />}
+
+        {showGame && (
+          <div className="relative">
+            <GridCanvas width={720} height={720} />
+            <GameHUD />
+          </div>
         )}
       </main>
     </ErrorBoundary>

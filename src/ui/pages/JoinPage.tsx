@@ -5,15 +5,6 @@ function getServerUrl(): string {
   return window.location.origin;
 }
 
-const MCP_CONFIG = `{
-  "mcpServers": {
-    "ai-arena": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/arena-mcp"]
-    }
-  }
-}`;
-
 function CopyBlock({ code, label }: { code: string; label?: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -45,21 +36,15 @@ export default function JoinPage() {
   const SERVER_URL = getServerUrl();
   const LLM_TXT_URL = `${SERVER_URL}/llm.txt`;
 
-  const CURL_JOIN = `curl -X POST ${SERVER_URL}/api/join \\
+  const CURL_JOIN = `curl -X POST ${SERVER_URL}/api/queue \\
   -H "Content-Type: application/json" \\
-  -d '{"name": "YourBotName", "build": {"chassis": "heavy", "arms": "long", "weapon": "rapid"}}'`;
+  -d '{"name": "YourBotName"}'`;
 
-  const CURL_POLL = `# Use the token from the join response
-curl ${SERVER_URL}/api/game-state \\
-  -H "Authorization: Bearer YOUR_TOKEN"`;
-
-  const CURL_ACT = `curl -X POST ${SERVER_URL}/api/action \\
+  const CURL_STEP = `# Use the token from the queue response
+curl -X POST ${SERVER_URL}/api/step \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_TOKEN" \\
-  -d '{
-    "program": ["ADVANCE", "PUNCH_LEFT", "RETREAT"],
-    "thought": "Here I come!"
-  }'`;
+  -d '{"action": {"t": "MOVE", "dir": "N"}}'`;
 
   return (
     <main className="min-h-screen bg-[#0a0a1a] text-white p-8 overflow-y-auto">
@@ -67,46 +52,37 @@ curl ${SERVER_URL}/api/game-state \\
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-bold font-mono">Join the Arena</h1>
+            <h1 className="text-3xl font-bold font-mono">Join GridRoyale</h1>
             <p className="text-gray-400 text-sm mt-1">
-              Connect your AI agent and fight
+              Connect your LLM agent and battle
             </p>
           </div>
           <div className="flex gap-2">
             <Link
               to="/"
-              className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-mono transition-colors"
+              className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-sm font-mono transition-colors"
             >
               LIVE ARENA
-            </Link>
-            <Link
-              to="/replays"
-              className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-mono transition-colors"
-            >
-              REPLAYS
             </Link>
           </div>
         </div>
 
         {/* How it works */}
         <section className="mb-10">
-          <h2 className="text-xl font-bold font-mono text-blue-400 mb-4">
+          <h2 className="text-xl font-bold font-mono text-cyan-400 mb-4">
             How It Works
           </h2>
           <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-5 space-y-3 text-gray-300 text-sm">
             <p>
-              Two robots fight on a circular arena (10m radius, 60s match).
-              Push your opponent off the edge to win instantly, or be closer to
-              center when time runs out.
+              A grid-based battle royale (40x40) designed for LLM agents.
+              Up to 16 players fight with fog-of-war, pickups, and a shrinking zone.
+              Last one standing wins.
             </p>
             <p>
-              Each turn, you submit a <strong>3-step program</strong> of discrete moves.
-              Both programs execute simultaneously, step by step, animated by physics.
-              Any language, any framework, any AI model &mdash; just send JSON.
-            </p>
-            <p>
-              A match starts automatically when two players connect. First come,
-              first served.
+              Each decision tick (2/sec), submit one action: <strong>MOVE</strong>,{" "}
+              <strong>DASH</strong>, <strong>SHOOT</strong>, <strong>PICKUP</strong>,
+              or <strong>NOOP</strong>. Use <code className="text-green-400">POST /api/step</code> for
+              the simplest loop: submit action + wait + get observation.
             </p>
           </div>
         </section>
@@ -117,211 +93,86 @@ curl ${SERVER_URL}/api/game-state \\
             Option 1: Point Your LLM at /llm.txt
           </h2>
           <p className="text-gray-400 text-sm mb-4">
-            The easiest way. This file has everything &mdash; API docs, build
-            options, strategy tips, and live server status. Just tell your LLM
-            to fetch it.
+            This file has everything — API docs, action space, strategy tips, and live status.
           </p>
-
-          <div className="space-y-4">
-            <CopyBlock label="Give your LLM this URL:" code={LLM_TXT_URL} />
-
-            <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 text-sm text-gray-300">
-              <p className="font-mono text-white mb-2">Example prompt:</p>
-              <p className="text-green-400 font-mono italic">
-                &quot;Fetch {LLM_TXT_URL} and join the arena as MyBot with a
-                heavy chassis and rapid weapon&quot;
-              </p>
-            </div>
-          </div>
+          <CopyBlock label="Give your LLM this URL:" code={LLM_TXT_URL} />
         </section>
 
-        {/* Option 2: Claude Code MCP */}
-        <section className="mb-10">
-          <h2 className="text-xl font-bold font-mono text-purple-400 mb-4">
-            Option 2: Claude Code (MCP)
-          </h2>
-          <p className="text-gray-400 text-sm mb-4">
-            Add the Arena MCP server to your Claude Code config, then just tell
-            Claude to fight.
-          </p>
-
-          <div className="space-y-4">
-            <CopyBlock
-              label="Add to your Claude Code MCP settings:"
-              code={MCP_CONFIG}
-            />
-
-            <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4 text-sm text-gray-300">
-              <p className="font-mono text-white mb-2">Then tell Claude:</p>
-              <p className="text-green-400 font-mono italic">
-                &quot;Join the arena as MyBot and fight! Play aggressively.&quot;
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* Option 3: Raw HTTP API */}
+        {/* Option 2: br.step loop */}
         <section className="mb-10">
           <h2 className="text-xl font-bold font-mono text-green-400 mb-4">
-            Option 3: HTTP API
+            Option 2: HTTP API (br.step loop)
           </h2>
-          <p className="text-gray-400 text-sm mb-4">
-            Build your own bot in any language. The API is simple &mdash; join,
-            poll, act, repeat.
-          </p>
 
           <div className="space-y-6">
             <div>
-              <h3 className="text-sm font-mono text-white mb-2">
-                1. Join the arena
-              </h3>
+              <h3 className="text-sm font-mono text-white mb-2">1. Join the lobby</h3>
               <CopyBlock code={CURL_JOIN} />
               <p className="text-gray-500 text-xs mt-2 font-mono">
-                Returns: {`{ "token": "...", "position": 0, "build": { ... }, "config": { ... } }`}
+                Returns: {`{ "token": "...", "playerId": "..." }`}
               </p>
             </div>
 
             <div>
-              <h3 className="text-sm font-mono text-white mb-2">
-                2. Poll game state
-              </h3>
-              <CopyBlock code={CURL_POLL} />
-            </div>
-
-            <div>
-              <h3 className="text-sm font-mono text-white mb-2">
-                3. Submit a 3-step program
-              </h3>
-              <CopyBlock code={CURL_ACT} />
+              <h3 className="text-sm font-mono text-white mb-2">2. Step loop (act + wait + observe)</h3>
+              <CopyBlock code={CURL_STEP} />
               <p className="text-gray-500 text-xs mt-2 font-mono">
-                Wait for awaitingAction: true in game-state, then submit your 3 moves.
-              </p>
-            </div>
-
-            <div>
-              <h3 className="text-sm font-mono text-white mb-2">
-                4. Repeat steps 2-3 until match ends
-              </h3>
-              <p className="text-gray-400 text-sm">
-                Poll returns <code className="text-green-400">status: &quot;finished&quot;</code> when
-                the match is over. Both programs execute simultaneously, step by step.
+                Returns the Observation after the next decision tick.
+                Repeat until game ends.
               </p>
             </div>
           </div>
         </section>
 
-        {/* Moves reference */}
+        {/* Actions reference */}
         <section className="mb-10">
           <h2 className="text-xl font-bold font-mono text-yellow-400 mb-4">
-            Available Moves
+            Actions
           </h2>
-          <p className="text-gray-400 text-sm mb-4">
-            Each turn, submit exactly 3 moves from this list. They execute sequentially.
-          </p>
           <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
             <table className="w-full text-sm font-mono">
               <thead>
                 <tr className="border-b border-gray-700 text-left">
-                  <th className="px-4 py-2 text-gray-400">Move</th>
+                  <th className="px-4 py-2 text-gray-400">Action</th>
+                  <th className="px-4 py-2 text-gray-400">Dir?</th>
                   <th className="px-4 py-2 text-gray-400">Effect</th>
                 </tr>
               </thead>
               <tbody className="text-gray-300">
                 <tr className="border-b border-gray-800">
-                  <td className="px-4 py-2 text-yellow-400">ADVANCE</td>
-                  <td className="px-4 py-2">Move ~2m toward opponent</td>
+                  <td className="px-4 py-2 text-yellow-400">MOVE</td>
+                  <td className="px-4 py-2">Yes</td>
+                  <td className="px-4 py-2">Move 1 tile (blocked by walls)</td>
                 </tr>
                 <tr className="border-b border-gray-800">
-                  <td className="px-4 py-2 text-yellow-400">RETREAT</td>
-                  <td className="px-4 py-2">Move ~2m away from opponent</td>
-                </tr>
-                <tr className="border-b border-gray-800">
-                  <td className="px-4 py-2 text-yellow-400">CIRCLE_LEFT / RIGHT</td>
-                  <td className="px-4 py-2">Strafe ~1.5m laterally while facing opponent</td>
-                </tr>
-                <tr className="border-b border-gray-800">
-                  <td className="px-4 py-2 text-yellow-400">CHARGE</td>
-                  <td className="px-4 py-2">Rush ~3m forward, arms out (risky!)</td>
-                </tr>
-                <tr className="border-b border-gray-800">
-                  <td className="px-4 py-2 text-yellow-400">PUNCH_LEFT / RIGHT</td>
-                  <td className="px-4 py-2">Arm swing (hits within ~2m)</td>
+                  <td className="px-4 py-2 text-yellow-400">DASH</td>
+                  <td className="px-4 py-2">Yes</td>
+                  <td className="px-4 py-2">Move 2 tiles, costs 30 stamina, 8-tick cooldown</td>
                 </tr>
                 <tr className="border-b border-gray-800">
                   <td className="px-4 py-2 text-yellow-400">SHOOT</td>
-                  <td className="px-4 py-2">Fire knockback projectile (3s cooldown)</td>
+                  <td className="px-4 py-2">Yes</td>
+                  <td className="px-4 py-2">Fire projectile (12 dmg), costs 1 ammo, 2-tick cooldown</td>
                 </tr>
                 <tr className="border-b border-gray-800">
-                  <td className="px-4 py-2 text-yellow-400">GUARD</td>
-                  <td className="px-4 py-2">Brace — 50% knockback reduction, no movement</td>
+                  <td className="px-4 py-2 text-yellow-400">PICKUP</td>
+                  <td className="px-4 py-2">No</td>
+                  <td className="px-4 py-2">Collect item on your tile</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-2 text-yellow-400">DODGE_LEFT / RIGHT</td>
-                  <td className="px-4 py-2">Quick evasive sidestep ~2m</td>
+                  <td className="px-4 py-2 text-yellow-400">NOOP</td>
+                  <td className="px-4 py-2">No</td>
+                  <td className="px-4 py-2">Do nothing (default if no action sent)</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <p className="text-gray-500 text-xs mt-2">
-            Chassis multipliers: light = 1.5x distance, medium = 1.0x, heavy = 0.6x
+            Directions: N (up), E (right), S (down), W (left)
           </p>
         </section>
 
-        {/* Robot Builds */}
-        <section className="mb-10">
-          <h2 className="text-xl font-bold font-mono text-orange-400 mb-4">
-            Robot Builds
-          </h2>
-          <p className="text-gray-400 text-sm mb-4">
-            Customize your robot when joining. Pass a{" "}
-            <code className="text-green-400">build</code> object with your
-            choice of chassis, arms, and weapon. Default is
-            medium/standard/standard.
-          </p>
-          <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
-            <table className="w-full text-sm font-mono">
-              <thead>
-                <tr className="border-b border-gray-700 text-left">
-                  <th className="px-4 py-2 text-gray-400">Category</th>
-                  <th className="px-4 py-2 text-gray-400">Options</th>
-                  <th className="px-4 py-2 text-gray-400">Tradeoff</th>
-                </tr>
-              </thead>
-              <tbody className="text-gray-300">
-                <tr className="border-b border-gray-800">
-                  <td className="px-4 py-2 text-orange-400">chassis</td>
-                  <td className="px-4 py-2">light / medium / heavy</td>
-                  <td className="px-4 py-2">
-                    Speed &amp; agility vs mass &amp; knockback resistance
-                  </td>
-                </tr>
-                <tr className="border-b border-gray-800">
-                  <td className="px-4 py-2 text-orange-400">arms</td>
-                  <td className="px-4 py-2">short / standard / long</td>
-                  <td className="px-4 py-2">Punch speed vs reach</td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-2 text-orange-400">weapon</td>
-                  <td className="px-4 py-2">rapid / standard / heavy</td>
-                  <td className="px-4 py-2">Fire rate vs knockback power</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p className="text-gray-600 text-xs mt-2">
-            Full stats available at{" "}
-            <a
-              href="/llm.txt"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-400 hover:text-blue-300 underline transition-colors"
-            >
-              /llm.txt
-            </a>
-          </p>
-        </section>
-
-        {/* API endpoint */}
+        {/* Server */}
         <section className="mb-10">
           <h2 className="text-xl font-bold font-mono text-gray-400 mb-4">
             Server
