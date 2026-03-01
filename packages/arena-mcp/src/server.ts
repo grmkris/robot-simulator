@@ -52,7 +52,7 @@ function txt(text: string) {
 export function createArenaMcpServer(): McpServer {
   const server = new McpServer({
     name: "ai-arena",
-    version: "0.3.0",
+    version: "0.4.0",
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -141,11 +141,14 @@ export function createArenaMcpServer(): McpServer {
             `  Arms: ${resolvedBuild.arms} — ${resolvedBuild.arms === "short" ? "fast snappy punches, low reach" : resolvedBuild.arms === "long" ? "slow sweeping hits, huge reach" : "balanced reach and speed"}`,
             `  Weapon: ${resolvedBuild.weapon} — ${resolvedBuild.weapon === "rapid" ? "1.8s cooldown, low knockback" : resolvedBuild.weapon === "heavy" ? "4.5s cooldown, devastating knockback" : "3s cooldown, medium knockback"}`,
             ``,
-            `Game loop:`,
-            `  1. arena_poll → read tactical data`,
-            `  2. Decide your move`,
-            `  3. arena_act → submit arm positions (-1 to +1) + public thought`,
-            `  4. Repeat until match ends`,
+            `Turn-based game loop:`,
+            `  1. arena_poll → when awaitingAction is true, it's your turn`,
+            `  2. Decide your move based on the tactical data`,
+            `  3. arena_act → submit arm positions + drive/turn/shoot`,
+            `  4. arena_poll → server advances 12 physics ticks, new state ready`,
+            `  5. Repeat until match ends (~300 turns per 60s match)`,
+            ``,
+            `You have up to 30s per turn — no rush!`,
             ``,
             `If no opponent is waiting, share the join instructions and wait for another player.`,
             `Watch live: ${VIEWER_URL}`,
@@ -185,6 +188,8 @@ export function createArenaMcpServer(): McpServer {
         const state = (await res.json()) as {
           status: string;
           tick?: number;
+          turn?: number;
+          awaitingAction?: boolean;
           tactical?: {
             distanceToOpponent: number;
             myDistFromCenter: number;
@@ -232,8 +237,14 @@ export function createArenaMcpServer(): McpServer {
             const t = state.tactical!;
             const myBuild = state.myBuild ?? t.myBuild;
             const oppBuild = state.opponentBuild ?? t.opponentBuild;
+            const turnInfo = state.turn != null ? `Turn ${state.turn}` : "";
+            const awaiting = state.awaitingAction;
+
             const lines = [
-              `MATCH ACTIVE | Tick ${state.tick} | ${t.timeRemainingS.toFixed(1)}s left`,
+              `MATCH ACTIVE | ${turnInfo} | Tick ${state.tick} | ${t.timeRemainingS.toFixed(1)}s left`,
+              awaiting
+                ? `>>> YOUR TURN — submit action with arena_act <<<`
+                : `Waiting for opponent to act... poll again in 1-2s.`,
               ``,
               `My build: ${myBuild ? `${myBuild.chassis}/${myBuild.arms}/${myBuild.weapon}` : "unknown"}`,
               `Opponent build: ${oppBuild ? `${oppBuild.chassis}/${oppBuild.arms}/${oppBuild.weapon}` : "unknown"}`,
@@ -346,8 +357,11 @@ export function createArenaMcpServer(): McpServer {
         }
         if (!res.ok) return txt(`Action failed: ${res.status} ${res.statusText}`);
 
+        const data = (await res.json()) as { ok: boolean; tick?: number; turn?: number };
+        const turnLabel = data.turn != null ? `Turn ${data.turn} submitted. ` : "";
         return txt(
-          `Done. L=${leftArm.toFixed(2)} R=${rightArm.toFixed(2)}` +
+          `${turnLabel}L=${leftArm.toFixed(2)} R=${rightArm.toFixed(2)}` +
+            ` drive=${drive.toFixed(2)} turn=${turn.toFixed(2)}${shoot ? " SHOOT" : ""}` +
             (thought ? ` — "${thought}"` : "")
         );
       } catch (err) {

@@ -7,7 +7,7 @@
  * - Match results recorded to SQLite for leaderboard
  * - Lobby state broadcast to spectators via WebSocket
  */
-import { Simulation, GameLoop, initPhysics } from "@ai-arena/sim";
+import { Simulation, initPhysics } from "@ai-arena/sim";
 import type { ActionProvider } from "@ai-arena/sim";
 import type {
   AgentAction,
@@ -28,9 +28,11 @@ import {
   TICK_DURATION_S,
   MATCH_DURATION_S,
   VIEWER_BROADCAST_INTERVAL,
-  AGENT_INACTIVITY_TIMEOUT_MS,
   MAX_QUEUE_SIZE,
   QUEUE_INACTIVITY_TIMEOUT_MS,
+  TICKS_PER_TURN,
+  TURN_TIMEOUT_MS,
+  COUNTDOWN_DURATION_TICKS,
   buildRobotConfig,
   DEFAULT_BUILD,
 } from "@ai-arena/protocol";
@@ -65,6 +67,7 @@ interface ConnectedAgent {
   lastActionTick: number;
   lastThought: string | null;
   lastPrivateThought: string | null;
+  hasActedThisTurn: boolean;
 }
 
 export class MatchManager {
@@ -81,13 +84,18 @@ export class MatchManager {
   private agents = new Map<AgentId, ConnectedAgent>();
   private tokenToAgent = new Map<string, AgentId>();
   private sim: Simulation | null = null;
-  private loop: GameLoop | null = null;
   private _currentState: WorldState | null = null;
-  private ticksSinceLastBroadcast = 0;
   private viewerFrameHistory: ViewerFrame[] = [];
-  private inactivityTimer: ReturnType<typeof setInterval> | null = null;
   private lastResult: MatchResult | null = null;
   private currentMatchId: string | null = null;
+
+  // ── Turn-based state ──
+  private _currentTurn = 0;
+  private _awaitingActions = false;
+  private turnResolve: (() => void) | null = null;
+  private turnTimeout: ReturnType<typeof setTimeout> | null = null;
+  private matchAborted = false;
+  private pollInactivityTimer: ReturnType<typeof setInterval> | null = null;
 
   // ── Spectators ──
   private spectators = new Set<WSContext>();
@@ -344,6 +352,7 @@ export class MatchManager {
       lastActionTick: 0,
       lastThought: null,
       lastPrivateThought: null,
+      hasActedThisTurn: false,
     });
     this.agents.set(1, {
       token: agentB.token,
@@ -354,6 +363,7 @@ export class MatchManager {
       lastActionTick: 0,
       lastThought: null,
       lastPrivateThought: null,
+      hasActedThisTurn: false,
     });
     this.tokenToAgent.set(agentA.token, 0);
     this.tokenToAgent.set(agentB.token, 1);
@@ -439,13 +449,15 @@ export class MatchManager {
       opponentLastThought: opponent?.lastThought ?? null,
       myBuild: agent.build,
       opponentBuild: opponentAgent?.build ?? DEFAULT_BUILD,
+      turn: this._currentTurn,
+      awaitingAction: this._awaitingActions && !agent.hasActedThisTurn,
     };
   }
 
   /** Receive an action from an agent via HTTP */
-  receiveAction(agentId: AgentId, action: AgentAction): void {
+  receiveAction(agentId: AgentId, action: AgentAction): { turn: number } {
     const agent = this.agents.get(agentId);
-    if (!agent) return;
+    if (!agent) return { turn: this._currentTurn };
 
     agent.confirmedAction = {
       leftArmTarget: action.leftArmTarget,
@@ -459,14 +471,36 @@ export class MatchManager {
     agent.lastPrivateThought = action.privateThought ?? null;
     agent.lastActionTick = this._currentState?.tick ?? 0;
     agent.lastPollTime = Date.now();
+    agent.hasActedThisTurn = true;
 
     const thoughtPreview = agent.lastThought
       ? ` 💭 "${agent.lastThought.slice(0, 50)}"`
       : "";
     const movePreview = `drive=${(action.driveForce ?? 0).toFixed(2)} turn=${(action.turnRate ?? 0).toFixed(2)}${action.shoot ? " SHOOT" : ""}`;
     console.log(
-      `[Match] Agent ${agentId} ("${agent.name}") action: L=${action.leftArmTarget.toFixed(2)} R=${action.rightArmTarget.toFixed(2)} ${movePreview}${thoughtPreview}`
+      `[Match] Agent ${agentId} ("${agent.name}") turn ${this._currentTurn} action: L=${action.leftArmTarget.toFixed(2)} R=${action.rightArmTarget.toFixed(2)} ${movePreview}${thoughtPreview}`
     );
+
+    // Check if both agents have acted this turn → resolve turn Promise
+    this.checkTurnReady();
+
+    return { turn: this._currentTurn };
+  }
+
+  /** Check if both agents have submitted actions and resolve the turn */
+  private checkTurnReady(): void {
+    if (!this._awaitingActions || !this.turnResolve) return;
+
+    const allActed = [...this.agents.values()].every((a) => a.hasActedThisTurn);
+    if (allActed) {
+      if (this.turnTimeout) {
+        clearTimeout(this.turnTimeout);
+        this.turnTimeout = null;
+      }
+      const resolve = this.turnResolve;
+      this.turnResolve = null;
+      resolve();
+    }
   }
 
   /** Handle voluntary agent leave (POST /api/leave) */
@@ -482,6 +516,17 @@ export class MatchManager {
     this.agents.delete(agentId);
 
     if (this.sim && (this.sim.phase === "active" || this.sim.phase === "countdown")) {
+      // Abort the turn loop so handleMatchEnd can proceed
+      this.matchAborted = true;
+      if (this.turnResolve) {
+        if (this.turnTimeout) {
+          clearTimeout(this.turnTimeout);
+          this.turnTimeout = null;
+        }
+        const resolve = this.turnResolve;
+        this.turnResolve = null;
+        resolve();
+      }
       const winner: AgentId = agentId === 0 ? 1 : 0;
       this.handleMatchEnd({
         winner,
@@ -510,14 +555,14 @@ export class MatchManager {
   // Match Lifecycle
   // ══════════════════════════════════════════
 
-  /** Start a match (called after 2 agents are paired from queue) */
+  /** Start a match (called after 2 agents are paired from queue) — turn-based */
   private async startMatch(): Promise<void> {
     if (this.agents.size < 2 || this.sim) return;
 
     const agent0 = this.agents.get(0);
     const agent1 = this.agents.get(1);
     console.log(
-      `[Match] "${agent0?.name}" vs "${agent1?.name}" — Starting match with countdown...`
+      `[Match] "${agent0?.name}" vs "${agent1?.name}" — Starting turn-based match...`
     );
 
     await initPhysics();
@@ -530,6 +575,9 @@ export class MatchManager {
     this.viewerFrameHistory = [];
     this.lastResult = null;
     this.currentMatchId = generateMatchId();
+    this.matchAborted = false;
+    this._currentTurn = 0;
+    this._awaitingActions = false;
 
     const actionProvider: ActionProvider = (
       agentId: AgentId,
@@ -544,24 +592,90 @@ export class MatchManager {
       return action;
     };
 
-    this.loop = new GameLoop(this.sim, actionProvider, {
-      onTick: (state) => {
+    // Start poll-based inactivity checker (60s no-poll → forfeit)
+    this.startPollInactivityChecker();
+
+    // ── Run countdown synchronously ──
+    console.log(`[Match] Running countdown (${COUNTDOWN_DURATION_TICKS} ticks)...`);
+    const noOpProvider: ActionProvider = () => ({ ...NO_OP });
+    for (let i = 0; i < COUNTDOWN_DURATION_TICKS; i++) {
+      const state = this.sim.step(noOpProvider);
+      this._currentState = state;
+      this.captureViewerFrame(state);
+      // Broadcast to viewer at 30Hz rate
+      if (i % VIEWER_BROADCAST_INTERVAL === 0) {
+        this.broadcastToSpectators(state);
+      }
+    }
+
+    // ── Turn-based active phase ──
+    console.log(`[Match] Active phase — ${TICKS_PER_TURN} ticks/turn, ${TURN_TIMEOUT_MS / 1000}s timeout`);
+
+    while (this.sim && this.sim.phase === "active" && !this.matchAborted) {
+      // Run TICKS_PER_TURN physics ticks with current actions
+      for (let i = 0; i < TICKS_PER_TURN; i++) {
+        if (!this.sim || this.matchAborted) break;
+        const state = this.sim.step(actionProvider);
         this._currentState = state;
         this.captureViewerFrame(state);
 
-        this.ticksSinceLastBroadcast++;
-        if (this.ticksSinceLastBroadcast >= VIEWER_BROADCAST_INTERVAL) {
-          this.broadcastToSpectators(state);
-          this.ticksSinceLastBroadcast = 0;
+        const result = this.sim.matchResult;
+        if (result) {
+          this.handleMatchEnd(result);
+          return;
         }
-      },
-      onMatchEnd: (result) => {
-        this.handleMatchEnd(result);
-      },
-    });
+      }
 
-    this.loop.start();
-    this.startInactivityChecker();
+      if (this.matchAborted || !this.sim) break;
+
+      // Broadcast final frame of this turn to viewer
+      if (this._currentState) {
+        this.broadcastToSpectators(this._currentState);
+      }
+
+      // Reset action flags and await both agents
+      for (const [, agent] of this.agents) {
+        agent.hasActedThisTurn = false;
+      }
+      this._awaitingActions = true;
+      this._currentTurn++;
+
+      console.log(`[Match] Turn ${this._currentTurn} — awaiting actions...`);
+
+      // Wait for both agents to submit actions (or timeout)
+      await this.waitForBothActions();
+
+      this._awaitingActions = false;
+
+      if (this.matchAborted) break;
+    }
+
+    // If loop exited due to abort (disconnect), match end is handled by handleAgentLeave
+  }
+
+  /** Wait for both agents to submit actions, with per-turn timeout */
+  private waitForBothActions(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      // Check if both already acted (fast agents)
+      const allActed = [...this.agents.values()].every((a) => a.hasActedThisTurn);
+      if (allActed) {
+        resolve();
+        return;
+      }
+
+      this.turnResolve = resolve;
+
+      // Per-turn timeout — use NO_OP for non-responding agents
+      this.turnTimeout = setTimeout(() => {
+        const nonActed = [...this.agents.entries()]
+          .filter(([, a]) => !a.hasActedThisTurn)
+          .map(([id, a]) => `${id}("${a.name}")`);
+        console.log(`[Match] Turn ${this._currentTurn} timeout — no action from: ${nonActed.join(", ")}`);
+        this.turnResolve = null;
+        this.turnTimeout = null;
+        resolve();
+      }, TURN_TIMEOUT_MS);
+    });
   }
 
   // ══════════════════════════════════════════
@@ -660,33 +774,33 @@ export class MatchManager {
   }
 
   // ══════════════════════════════════════════
-  // Inactivity Detection
+  // Poll-based Inactivity Detection (60s timeout)
   // ══════════════════════════════════════════
 
-  private startInactivityChecker(): void {
-    this.inactivityTimer = setInterval(() => {
+  private static readonly POLL_INACTIVITY_MS = 60_000; // 60s no-poll → forfeit
+
+  private startPollInactivityChecker(): void {
+    this.pollInactivityTimer = setInterval(() => {
       if (!this.sim || this.sim.phase === "finished") return;
-      // Don't kick agents during countdown
-      if (this.sim.phase !== "active") return;
 
       const now = Date.now();
       for (const [id, agent] of this.agents) {
         const inactiveMs = now - agent.lastPollTime;
-        if (inactiveMs > AGENT_INACTIVITY_TIMEOUT_MS) {
+        if (inactiveMs > MatchManager.POLL_INACTIVITY_MS) {
           console.log(
-            `[Match] Agent ${id} ("${agent.name}") forfeited: inactive for ${(inactiveMs / 1000).toFixed(1)}s`
+            `[Match] Agent ${id} ("${agent.name}") forfeited: no poll for ${(inactiveMs / 1000).toFixed(1)}s`
           );
           this.handleAgentLeave(id);
           return;
         }
       }
-    }, 1000);
+    }, 5000);
   }
 
-  private stopInactivityChecker(): void {
-    if (this.inactivityTimer) {
-      clearInterval(this.inactivityTimer);
-      this.inactivityTimer = null;
+  private stopPollInactivityChecker(): void {
+    if (this.pollInactivityTimer) {
+      clearInterval(this.pollInactivityTimer);
+      this.pollInactivityTimer = null;
     }
   }
 
@@ -762,7 +876,7 @@ export class MatchManager {
       opponentSpeed: Math.round(opponentSpeed * 100) / 100,
       timeRemainingS:
         Math.round((MATCH_DURATION_S - state.elapsed) * 10) / 10,
-      round: 0,
+      round: this._currentTurn,
       myFacingAngle: Math.round(myFacingAngle * 100) / 100,
       opponentFacingAngle: Math.round(opponentFacingAngle * 100) / 100,
       angleToOpponent: Math.round(angleToOpponent * 100) / 100,
@@ -858,7 +972,7 @@ export class MatchManager {
           privateThought: a1?.lastPrivateThought ?? null,
         },
       },
-      round: 0,
+      round: this._currentTurn,
       agentNames: {
         A: a0?.name ?? "Robot A",
         B: a1?.name ?? "Robot B",
@@ -898,7 +1012,7 @@ export class MatchManager {
         A: { thought: a0?.lastThought ?? null, privateThought: a0?.lastPrivateThought ?? null },
         B: { thought: a1?.lastThought ?? null, privateThought: a1?.lastPrivateThought ?? null },
       },
-      round: 0,
+      round: this._currentTurn,
     });
   }
 
@@ -928,8 +1042,13 @@ export class MatchManager {
   }
 
   private handleMatchEnd(result: MatchResult): void {
-    this.loop?.stop();
-    this.stopInactivityChecker();
+    this.stopPollInactivityChecker();
+    this._awaitingActions = false;
+    if (this.turnTimeout) {
+      clearTimeout(this.turnTimeout);
+      this.turnTimeout = null;
+    }
+    this.turnResolve = null;
 
     this.lastResult = result;
 
@@ -993,9 +1112,8 @@ export class MatchManager {
     // Cleanup sim but keep agents + tokens so they can poll for result
     this.sim?.destroy();
     this.sim = null;
-    this.loop = null;
     this._currentState = null;
-    this.ticksSinceLastBroadcast = 0;
+    this._currentTurn = 0;
     this.viewerFrameHistory = [];
     this.currentMatchId = null;
 

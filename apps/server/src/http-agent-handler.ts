@@ -122,11 +122,12 @@ export function createAgentRoutes(matchManager: MatchManager): Hono {
       );
     }
 
-    matchManager.receiveAction(agentId, parsed.data);
+    const result = matchManager.receiveAction(agentId, parsed.data);
 
     return c.json({
       ok: true,
       tick: matchManager.currentState?.tick ?? 0,
+      turn: result.turn,
     });
   });
 

@@ -192,6 +192,9 @@ export interface GameStateResponse {
   position?: number;
   queueSize?: number;
   room?: string;
+  // Turn-based state
+  turn?: number;
+  awaitingAction?: boolean;
   // Finished state
   winner?: AgentId | null;
   reason?: string;

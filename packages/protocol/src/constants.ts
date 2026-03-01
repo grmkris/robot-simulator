@@ -40,8 +40,12 @@ export const MATCH_DURATION_TICKS = MATCH_DURATION_S * TICK_RATE;
 export const RING_OUT_Y_THRESHOLD = -2;
 export const RING_OUT_DISTANCE_MARGIN = 1; // beyond arena radius
 
+// ── Turn-based ──
+export const TICKS_PER_TURN = 12; // 200ms game time per turn (300 turns per 60s match)
+export const TURN_TIMEOUT_MS = 30_000; // 30s per-turn timeout
+
 // ── Protocol ──
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const MAX_AGENTS = 2;
 export const VIEWER_BROADCAST_RATE = 30; // Hz
 export const VIEWER_BROADCAST_INTERVAL = Math.floor(TICK_RATE / VIEWER_BROADCAST_RATE);

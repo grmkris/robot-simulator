@@ -84,4 +84,22 @@ export class GameLoop {
 
     return lastState;
   }
+
+  /**
+   * Run a single turn: advance N ticks synchronously.
+   * Returns true if the match ended during this turn.
+   */
+  runTurn(ticksPerTurn: number): boolean {
+    for (let i = 0; i < ticksPerTurn; i++) {
+      const state = this.sim.step(this.actionProvider);
+      this.callbacks.onTick?.(state);
+
+      if (this.sim.phase === "finished") {
+        const result = this.sim.matchResult;
+        if (result) this.callbacks.onMatchEnd?.(result);
+        return true;
+      }
+    }
+    return false;
+  }
 }
