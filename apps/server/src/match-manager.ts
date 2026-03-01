@@ -72,6 +72,11 @@ export class MatchManager {
   private queue: QueuedAgent[] = [];
   private tokenToQueue = new Map<string, QueuedAgent>();
 
+  // ── Rooms (private matchmaking) ──
+  private rooms = new Map<string, QueuedAgent[]>();
+  private tokenToRoom = new Map<string, string>();
+  private pendingPairs: Array<[QueuedAgent, QueuedAgent]> = [];
+
   // ── Active match ──
   private agents = new Map<AgentId, ConnectedAgent>();
   private tokenToAgent = new Map<string, AgentId>();
@@ -111,19 +116,19 @@ export class MatchManager {
     return this.sim !== null;
   }
 
-  /** Add an agent to the queue. Returns { token, position, build } or null if queue is full. */
-  enqueueAgent(name: string, build?: Partial<RobotBuild>): { token: string; position: number; build: RobotBuild } | null {
-    if (this.queue.length >= MAX_QUEUE_SIZE) return null;
-
-    // Check if name is already in queue or active match
+  /** Add an agent to the queue (or a private room). Returns { token, position, build, room? } or null if full/duplicate. */
+  enqueueAgent(name: string, build?: Partial<RobotBuild>, room?: string): { token: string; position: number; build: RobotBuild; room?: string } | null {
+    // Check if name is already in queue, rooms, pending pairs, or active match
     const nameLower = name.toLowerCase();
-    if (this.queue.some((q) => q.name.toLowerCase() === nameLower)) {
-      return null; // duplicate name in queue
+    if (this.queue.some((q) => q.name.toLowerCase() === nameLower)) return null;
+    for (const [, roomAgents] of this.rooms) {
+      if (roomAgents.some((q) => q.name.toLowerCase() === nameLower)) return null;
+    }
+    for (const pair of this.pendingPairs) {
+      if (pair.some((q) => q.name.toLowerCase() === nameLower)) return null;
     }
     for (const [, agent] of this.agents) {
-      if (agent.name.toLowerCase() === nameLower) {
-        return null; // already in active match
-      }
+      if (agent.name.toLowerCase() === nameLower) return null;
     }
 
     const token = crypto.randomUUID();
@@ -134,6 +139,37 @@ export class MatchManager {
       weapon: build?.weapon ?? DEFAULT_BUILD.weapon,
     };
     const entry: QueuedAgent = { name, build: resolvedBuild, token, joinedAt: now, lastPollTime: now };
+
+    if (room) {
+      // ── Room-based matchmaking ──
+      const roomAgents = this.rooms.get(room) ?? [];
+      if (roomAgents.length >= 2) return null; // room full
+
+      roomAgents.push(entry);
+      this.rooms.set(room, roomAgents);
+      this.tokenToRoom.set(token, room);
+      this.tokenToQueue.set(token, entry);
+
+      console.log(`[Room:${room}] "${name}" joined (${roomAgents.length}/2, token=${token.slice(0, 8)}...)`);
+
+      if (roomAgents.length === 2) {
+        const a = roomAgents[0]!;
+        const b = roomAgents[1]!;
+        this.rooms.delete(room);
+        this.tokenToRoom.delete(a.token);
+        this.tokenToRoom.delete(b.token);
+        this.pendingPairs.push([a, b]);
+        console.log(`[Room:${room}] Pair ready: "${a.name}" vs "${b.name}"`);
+        this.tryMatchFromQueue();
+      }
+
+      this.broadcastLobbyState();
+      return { token, position: roomAgents.length, build: resolvedBuild, room };
+    }
+
+    // ── Public queue ──
+    if (this.queue.length >= MAX_QUEUE_SIZE) return null;
+
     this.queue.push(entry);
     this.tokenToQueue.set(token, entry);
 
@@ -144,8 +180,43 @@ export class MatchManager {
     return { token, position: this.queue.length, build: resolvedBuild };
   }
 
-  /** Remove an agent from queue by token. */
+  /** Remove an agent from queue, room, or pending pair by token. */
   dequeueByToken(token: string): boolean {
+    // Check room first
+    const room = this.tokenToRoom.get(token);
+    if (room) {
+      const roomAgents = this.rooms.get(room);
+      if (roomAgents) {
+        const idx = roomAgents.findIndex((q) => q.token === token);
+        if (idx !== -1) {
+          const removed = roomAgents.splice(idx, 1)[0]!;
+          console.log(`[Room:${room}] "${removed.name}" left`);
+          if (roomAgents.length === 0) this.rooms.delete(room);
+        }
+      }
+      this.tokenToRoom.delete(token);
+      this.tokenToQueue.delete(token);
+      this.broadcastLobbyState();
+      return true;
+    }
+
+    // Check pending pairs
+    for (let i = 0; i < this.pendingPairs.length; i++) {
+      const pair = this.pendingPairs[i]!;
+      const matchIdx = pair.findIndex((a) => a.token === token);
+      if (matchIdx !== -1) {
+        const other = pair[1 - matchIdx]!;
+        this.pendingPairs.splice(i, 1);
+        this.tokenToQueue.delete(token);
+        // Put the remaining agent back in the public queue
+        this.queue.push(other);
+        console.log(`[Queue] "${other.name}" moved to public queue (room partner left)`);
+        this.broadcastLobbyState();
+        return true;
+      }
+    }
+
+    // Public queue
     const entry = this.tokenToQueue.get(token);
     if (!entry) return false;
 
@@ -156,11 +227,27 @@ export class MatchManager {
     return true;
   }
 
-  /** Get queue state for a token (returns position or null if not in queue). */
-  getQueuePosition(token: string): { position: number; queueSize: number } | null {
+  /** Get queue state for a token (returns position or null if not in queue/room). */
+  getQueuePosition(token: string): { position: number; queueSize: number; room?: string } | null {
     const entry = this.tokenToQueue.get(token);
     if (!entry) return null;
     entry.lastPollTime = Date.now();
+
+    // Check if in a room
+    const room = this.tokenToRoom.get(token);
+    if (room) {
+      const roomAgents = this.rooms.get(room);
+      return { position: 1, queueSize: roomAgents?.length ?? 1, room };
+    }
+
+    // Check if in a pending pair (matched, waiting for arena)
+    for (const pair of this.pendingPairs) {
+      if (pair.some((a) => a.token === token)) {
+        return { position: 1, queueSize: 2, room: "(matched)" };
+      }
+    }
+
+    // Public queue
     const idx = this.queue.indexOf(entry);
     if (idx === -1) return null;
     return { position: idx + 1, queueSize: this.queue.length };
@@ -169,6 +256,9 @@ export class MatchManager {
   /** Clean out agents that haven't polled in QUEUE_INACTIVITY_TIMEOUT_MS */
   private cleanQueue(): void {
     const now = Date.now();
+    let changed = false;
+
+    // Clean public queue
     const before = this.queue.length;
     this.queue = this.queue.filter((q) => {
       if (now - q.lastPollTime > QUEUE_INACTIVITY_TIMEOUT_MS) {
@@ -178,19 +268,69 @@ export class MatchManager {
       }
       return true;
     });
-    if (this.queue.length !== before) {
+    if (this.queue.length !== before) changed = true;
+
+    // Clean rooms
+    for (const [roomCode, agents] of this.rooms) {
+      const remaining = agents.filter((q) => {
+        if (now - q.lastPollTime > QUEUE_INACTIVITY_TIMEOUT_MS) {
+          console.log(`[Room:${roomCode}] "${q.name}" timed out`);
+          this.tokenToQueue.delete(q.token);
+          this.tokenToRoom.delete(q.token);
+          changed = true;
+          return false;
+        }
+        return true;
+      });
+      if (remaining.length === 0) {
+        this.rooms.delete(roomCode);
+      } else {
+        this.rooms.set(roomCode, remaining);
+      }
+    }
+
+    // Clean pending pairs — drop pairs where either agent timed out
+    this.pendingPairs = this.pendingPairs.filter(([a, b]) => {
+      const aAlive = now - a.lastPollTime <= QUEUE_INACTIVITY_TIMEOUT_MS;
+      const bAlive = now - b.lastPollTime <= QUEUE_INACTIVITY_TIMEOUT_MS;
+      if (!aAlive || !bAlive) {
+        if (!aAlive) this.tokenToQueue.delete(a.token);
+        if (!bAlive) this.tokenToQueue.delete(b.token);
+        // Put surviving agent back in public queue
+        const survivor = aAlive ? a : bAlive ? b : null;
+        if (survivor) {
+          this.queue.push(survivor);
+          console.log(`[Queue] "${survivor.name}" moved to public queue (partner timed out)`);
+        }
+        changed = true;
+        return false;
+      }
+      return true;
+    });
+
+    if (changed) {
       this.broadcastLobbyState();
     }
   }
 
-  /** Try to pop 2 agents from queue and start a match. */
+  /** Try to pop 2 agents from queue (or pending room pair) and start a match. */
   private tryMatchFromQueue(): void {
     if (this.sim || this.agents.size > 0) return; // match already in progress
     if (this.lastResult) return; // still in post-match window
-    if (this.queue.length < 2) return;
 
-    const agentA = this.queue.shift()!;
-    const agentB = this.queue.shift()!;
+    let agentA: QueuedAgent;
+    let agentB: QueuedAgent;
+
+    // Priority: pending room pairs first, then public queue
+    if (this.pendingPairs.length > 0) {
+      [agentA, agentB] = this.pendingPairs.shift()!;
+    } else if (this.queue.length >= 2) {
+      agentA = this.queue.shift()!;
+      agentB = this.queue.shift()!;
+    } else {
+      return;
+    }
+
     this.tokenToQueue.delete(agentA.token);
     this.tokenToQueue.delete(agentB.token);
 
@@ -495,7 +635,7 @@ export class MatchManager {
           }
         : null;
 
-    return { type: "lobby", queue, currentMatch };
+    return { type: "lobby", queue, currentMatch, roomsWaiting: this.rooms.size };
   }
 
   /** Send lobby state to a single spectator */

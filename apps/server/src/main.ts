@@ -16,6 +16,7 @@ import { createWSRoutes } from "./ws-handler.js";
 import { createAgentRoutes } from "./http-agent-handler.js";
 import { loadReplay, listReplaySummaries } from "./replay-store.js";
 import { initDb, getLeaderboard, getMatchHistory } from "./db.js";
+import { generateLlmTxt } from "./llm-txt.js";
 
 // Initialize database
 console.log("[Server] Initializing SQLite database...");
@@ -50,6 +51,9 @@ app.get("/health", (c) =>
     matchActive: matchManager.isMatchActive,
   })
 );
+
+// LLM agent instructions — any LLM can fetch this to learn how to play
+app.get("/llm.txt", (c) => c.text(generateLlmTxt(matchManager)));
 
 // Current match state (REST fallback for viewers)
 app.get("/api/match/state", (c) => {
@@ -140,6 +144,7 @@ console.log(`[Server] ── Viewer ──`);
 console.log(`[Server]   WS   ws://localhost:${PORT}/ws/spectator`);
 console.log(`[Server] ── Other ──`);
 console.log(`[Server]   GET  http://localhost:${PORT}/health`);
+console.log(`[Server]   GET  http://localhost:${PORT}/llm.txt`);
 console.log(`[Server]   GET  http://localhost:${PORT}/api/replays`);
 
 export default {

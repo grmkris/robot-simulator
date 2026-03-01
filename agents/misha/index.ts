@@ -70,8 +70,9 @@ function aggressiveDecision(tick: number, tactical: any) {
   let shoot = false;
   let thought = "";
 
-  const opponentTowardCenter = oppDist < myDist;
   const edgeRoom = 10 - myDist;
+  // Only consider opponent "toward center" if significantly closer
+  const oppSignificantlyCloserToCenter = oppDist < myDist - 1.5;
 
   // === CRITICAL EDGE DANGER ===
   if (edgeRoom < 2) {
@@ -81,48 +82,49 @@ function aggressiveDecision(tick: number, tactical: any) {
     rightArm = -0.5;
   }
   // === EDGE CAUTION ===
-  else if (edgeRoom < 4 && !opponentTowardCenter) {
-    drive = -0.5;
+  else if (edgeRoom < 3.5) {
+    drive = -0.7;
     shoot = cooldown <= 0 && aligned;
-    thought = shoot ? "EDGE SHOT!" : "HOLDING EDGE!";
+    thought = "BACKING OFF!";
   }
   // === CLOSE COMBAT ===
   else if (dist < 2.5) {
-    drive = aligned ? 0.7 : 0.3;
+    // Moderate push — never go full speed to avoid overshoot
+    drive = aligned ? 0.5 : 0.2;
     shoot = cooldown <= 0;
     thought = "EAT FISTS!";
     leftArm = Math.sin(tick * 0.6);
     rightArm = Math.sin(tick * 0.6 + Math.PI);
-    if (!opponentTowardCenter && edgeRoom > 4) {
-      drive = 1.0;
+    // Only full send if opponent is near THEIR edge and we have lots of room
+    if (oppDist > 6 && edgeRoom > 5 && aligned) {
+      drive = 0.8;
       thought = "PUSH OUT!";
     }
   }
   // === MID RANGE ===
   else if (dist < 5) {
-    const driveFactor = Math.min(0.8, (dist - 1.5) / 4);
-    drive = aligned ? driveFactor : driveFactor * 0.5;
+    // Gentle approach — scale with distance
+    const driveFactor = Math.min(0.6, (dist - 1.5) / 5);
+    drive = aligned ? driveFactor : driveFactor * 0.4;
     shoot = cooldown <= 0 && aligned;
     thought = shoot ? "FIRE!" : "CLOSING IN!";
-    if (!opponentTowardCenter && edgeRoom < 5) {
-      drive = Math.min(drive, 0.2);
-      thought = "CAREFUL APPROACH!";
-    }
   }
   // === LONG RANGE ===
   else {
-    drive = roughlyAligned ? 0.7 : 0.3;
+    drive = roughlyAligned ? 0.6 : 0.3;
     shoot = cooldown <= 0 && aligned && dist < 8;
     thought = "CHARGING!";
-    if (!opponentTowardCenter && edgeRoom < 5) {
-      drive = 0;
-      thought = "CIRCLING!";
-    }
   }
 
-  // Opponent near edge — go for the kill
-  if (oppDist > 7 && myDist < 6 && aligned) {
-    drive = 1.0;
+  // Safety cap: never drive forward if it would put us past 7m from center
+  if (drive > 0 && myDist > 7) {
+    drive = -0.3;
+    thought = "TOO FAR OUT!";
+  }
+
+  // Opponent near edge — careful push
+  if (oppDist > 7 && myDist < 5 && aligned) {
+    drive = 0.7;
     shoot = cooldown <= 0;
     thought = "RING OUT TIME!";
   }

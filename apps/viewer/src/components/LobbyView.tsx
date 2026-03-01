@@ -70,9 +70,16 @@ export function LobbyView() {
                     <span className="text-xs text-gray-500 w-5 text-right">
                       #{q.position}
                     </span>
-                    <span className="text-sm text-white font-medium">
-                      {q.name}
-                    </span>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm text-white font-medium">
+                        {q.name}
+                      </span>
+                      {q.build && (
+                        <div className="text-[10px] text-gray-500 font-mono">
+                          {q.build.chassis} / {q.build.arms} / {q.build.weapon}
+                        </div>
+                      )}
+                    </div>
                     {q.position <= 2 && (
                       <span className="ml-auto text-xs text-green-400 animate-pulse">
                         NEXT

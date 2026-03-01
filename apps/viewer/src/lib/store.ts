@@ -37,7 +37,7 @@ interface ArenaStore {
   builds: { A: RobotBuild; B: RobotBuild } | null;
 
   // Lobby state
-  queue: Array<{ name: string; position: number }>;
+  queue: Array<{ name: string; position: number; build?: RobotBuild }>;
   currentMatch: LobbyStateMessage["currentMatch"];
 
   // Actions

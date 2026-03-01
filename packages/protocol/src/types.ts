@@ -191,6 +191,7 @@ export interface GameStateResponse {
   // Queue info (when status = "queued")
   position?: number;
   queueSize?: number;
+  room?: string;
   // Finished state
   winner?: AgentId | null;
   reason?: string;
@@ -248,4 +249,5 @@ export interface LobbyState {
     tick: number;
     time: number;
   } | null;
+  roomsWaiting?: number;
 }

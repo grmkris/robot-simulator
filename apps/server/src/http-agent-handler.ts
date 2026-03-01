@@ -47,15 +47,16 @@ export function createAgentRoutes(matchManager: MatchManager): Hono {
       );
     }
 
-    const result = matchManager.enqueueAgent(parsed.data.name, parsed.data.build);
+    const result = matchManager.enqueueAgent(parsed.data.name, parsed.data.build, parsed.data.room);
     if (!result) {
-      return c.json({ error: "Queue is full or name is already taken" }, 409);
+      return c.json({ error: "Queue is full, room is full, or name is already taken" }, 409);
     }
 
     return c.json({
       token: result.token,
       position: result.position,
       build: result.build,
+      ...(result.room ? { room: result.room } : {}),
       protocolVersion: PROTOCOL_VERSION,
       config: {
         arenaRadius: ARENA_RADIUS,
@@ -72,13 +73,14 @@ export function createAgentRoutes(matchManager: MatchManager): Hono {
       return c.json({ error: "Missing Authorization: Bearer <token>" }, 401);
     }
 
-    // Check if agent is still in queue
+    // Check if agent is still in queue (or room)
     const queuePos = matchManager.getQueuePosition(token);
     if (queuePos) {
       return c.json({
         status: "queued",
         position: queuePos.position,
         queueSize: queuePos.queueSize,
+        ...(queuePos.room ? { room: queuePos.room } : {}),
       });
     }
 

@@ -98,4 +98,5 @@ export const MatchPhaseSchema = z.enum([
 export const JoinRequestSchema = z.object({
   name: z.string().min(1).max(32),
   build: RobotBuildSchema.optional(),
+  room: z.string().min(1).max(32).regex(/^[a-zA-Z0-9_-]+$/).optional(),
 });
