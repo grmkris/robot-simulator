@@ -65,8 +65,10 @@ export function Arena3D() {
     <div className="w-full h-full">
       <Canvas
         shadows
+        dpr={[1, 1.5]}
         camera={{ position: [0, 14, 18], fov: 50 }}
         style={{ background: "#0a0a1a" }}
+        gl={{ antialias: true, powerPreference: "default" }}
       >
         <SceneContent />
       </Canvas>

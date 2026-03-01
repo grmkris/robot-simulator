@@ -29,17 +29,18 @@ export default function Home() {
   useMatchSocket(wsUrl);
 
   const showLobby = matchPhase === "waiting" || matchPhase === "disconnected";
+  const showArena = !showLobby;
 
   return (
     <ErrorBoundary>
-      <main className="relative w-screen h-screen">
+      <main className="relative w-screen h-screen bg-[#0a0a1a]">
         <MatchHUD />
         {showLobby ? (
           <LobbyView />
         ) : (
           <ThoughtBubbles />
         )}
-        <Arena3D />
+        {showArena && <Arena3D />}
       </main>
     </ErrorBoundary>
   );
