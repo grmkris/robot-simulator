@@ -10,7 +10,7 @@ function formatTime(seconds: number): string {
 }
 
 export function MatchHUD() {
-  const { tick, time, matchPhase, connected, winner, winReason, agentNames, round, queue } =
+  const { tick, time, matchPhase, connected, winner, winReason, agentNames, builds, round, queue } =
     useArenaStore();
 
   // Don't show full HUD during waiting/disconnected — the LobbyView handles that
@@ -93,9 +93,19 @@ export function MatchHUD() {
         <div className="flex justify-between px-8 mt-2">
           <div className="bg-blue-600/60 backdrop-blur rounded-lg px-4 py-2">
             <span className="text-sm font-bold text-white">{agentNames.A}</span>
+            {builds?.A && (
+              <div className="text-[10px] text-blue-200/70 font-mono mt-0.5">
+                {builds.A.chassis} / {builds.A.arms} / {builds.A.weapon}
+              </div>
+            )}
           </div>
           <div className="bg-red-600/60 backdrop-blur rounded-lg px-4 py-2">
             <span className="text-sm font-bold text-white">{agentNames.B}</span>
+            {builds?.B && (
+              <div className="text-[10px] text-red-200/70 font-mono mt-0.5">
+                {builds.B.chassis} / {builds.B.arms} / {builds.B.weapon}
+              </div>
+            )}
           </div>
         </div>
       )}

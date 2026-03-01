@@ -1,7 +1,14 @@
 /** Viewer-side types for arena state received via WebSocket */
 
+export interface RobotBuild {
+  chassis: "light" | "medium" | "heavy";
+  arms: "short" | "standard" | "long";
+  weapon: "rapid" | "standard" | "heavy";
+}
+
 export interface ViewerRobotState {
   id: string;
+  build?: RobotBuild;
   position: [number, number, number];
   rotation: [number, number, number, number]; // quaternion xyzw
   armAngles: [number, number]; // [left, right]
@@ -36,6 +43,8 @@ export interface ViewerStateMessage {
   round?: number;
   /** Agent display names */
   agentNames?: { A: string; B: string };
+  /** Robot builds */
+  builds?: { A: RobotBuild; B: RobotBuild };
 }
 
 export interface MatchEndMessage {
@@ -47,7 +56,7 @@ export interface MatchEndMessage {
 /** Lobby state broadcast by server */
 export interface LobbyStateMessage {
   type: "lobby";
-  queue: Array<{ name: string; position: number }>;
+  queue: Array<{ name: string; position: number; build?: RobotBuild }>;
   currentMatch: {
     agentA: string;
     agentB: string;

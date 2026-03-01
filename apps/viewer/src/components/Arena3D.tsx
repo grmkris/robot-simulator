@@ -12,6 +12,7 @@ import { useArenaStore } from "@/lib/store";
 function SceneContent() {
   const robots = useArenaStore((s) => s.robots);
   const projectiles = useArenaStore((s) => s.projectiles);
+  const builds = useArenaStore((s) => s.builds);
 
   return (
     <>
@@ -34,6 +35,7 @@ function SceneContent() {
             armAngles={robots[0].armAngles}
             color="#2266ff"
             emissiveColor="#4488ff"
+            build={robots[0].build ?? builds?.A}
           />
           <RobotMesh
             position={robots[1].position}
@@ -41,6 +43,7 @@ function SceneContent() {
             armAngles={robots[1].armAngles}
             color="#ff4422"
             emissiveColor="#ff6644"
+            build={robots[1].build ?? builds?.B}
           />
         </>
       )}

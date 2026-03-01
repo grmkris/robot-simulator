@@ -26,6 +26,7 @@ interface ArenaSession {
   agentId: number;
   serverUrl: string;
   agentName: string;
+  build?: { chassis?: string; arms?: string; weapon?: string };
   createdAt: number;
 }
 
@@ -73,15 +74,35 @@ export function createArenaMcpServer(): McpServer {
         .max(32)
         .default("Agent")
         .describe("Your robot's display name"),
+      chassis: z
+        .enum(["light", "medium", "heavy"])
+        .optional()
+        .describe("Chassis type: light (fast, fragile), medium (balanced), heavy (slow, tanky). Default: medium"),
+      arms: z
+        .enum(["short", "standard", "long"])
+        .optional()
+        .describe("Arm type: short (fast punches), standard (balanced), long (huge reach). Default: standard"),
+      weapon: z
+        .enum(["rapid", "standard", "heavy"])
+        .optional()
+        .describe("Weapon type: rapid (1.8s cooldown, low knockback), standard (3s, medium), heavy (4.5s, devastating). Default: standard"),
     },
-    async ({ serverUrl, agentName }) => {
+    async ({ serverUrl, agentName, chassis, arms, weapon }) => {
       cleanSessions();
 
       try {
+        const build: Record<string, string> = {};
+        if (chassis) build.chassis = chassis;
+        if (arms) build.arms = arms;
+        if (weapon) build.weapon = weapon;
+
         const res = await fetch(`${serverUrl}/api/join`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: agentName }),
+          body: JSON.stringify({
+            name: agentName,
+            ...(Object.keys(build).length > 0 ? { build } : {}),
+          }),
         });
 
         if (!res.ok) {
@@ -92,15 +113,18 @@ export function createArenaMcpServer(): McpServer {
         const data = (await res.json()) as {
           token: string;
           agentId: number;
+          build?: { chassis: string; arms: string; weapon: string };
           config: { arenaRadius: number; tickRate: number; matchDurationS: number };
         };
 
         const sessionId = randomUUID();
+        const resolvedBuild = data.build ?? { chassis: chassis ?? "medium", arms: arms ?? "standard", weapon: weapon ?? "standard" };
         sessions.set(sessionId, {
           token: data.token,
           agentId: data.agentId,
           serverUrl,
           agentName,
+          build: resolvedBuild,
           createdAt: Date.now(),
         });
 
@@ -109,8 +133,13 @@ export function createArenaMcpServer(): McpServer {
             `Joined arena as "${agentName}"!`,
             ``,
             `Session: ${sessionId}`,
-            `You are Robot ${data.agentId}`,
+            `Build: ${resolvedBuild.chassis} chassis / ${resolvedBuild.arms} arms / ${resolvedBuild.weapon} weapon`,
             `Arena: ${data.config.arenaRadius}m radius, ${data.config.matchDurationS}s match, ${data.config.tickRate}Hz physics`,
+            ``,
+            `Build stats:`,
+            `  Chassis: ${resolvedBuild.chassis} — ${resolvedBuild.chassis === "light" ? "fast (5.5m/s) but fragile (1.3x knockback)" : resolvedBuild.chassis === "heavy" ? "slow (2.8m/s) but tanky (0.7x knockback)" : "balanced (4m/s, 1x knockback)"}`,
+            `  Arms: ${resolvedBuild.arms} — ${resolvedBuild.arms === "short" ? "fast snappy punches, low reach" : resolvedBuild.arms === "long" ? "slow sweeping hits, huge reach" : "balanced reach and speed"}`,
+            `  Weapon: ${resolvedBuild.weapon} — ${resolvedBuild.weapon === "rapid" ? "1.8s cooldown, low knockback" : resolvedBuild.weapon === "heavy" ? "4.5s cooldown, devastating knockback" : "3s cooldown, medium knockback"}`,
             ``,
             `Game loop:`,
             `  1. arena_poll → read tactical data`,
@@ -171,12 +200,18 @@ export function createArenaMcpServer(): McpServer {
             myCooldownS: number;
             opponentCooldownS: number;
             incomingProjectiles: number;
+            myBuild?: { chassis: string; arms: string; weapon: string };
+            opponentBuild?: { chassis: string; arms: string; weapon: string };
           };
           yourLastAction?: { leftArmTarget: number; rightArmTarget: number };
           opponentLastThought?: string | null;
+          myBuild?: { chassis: string; arms: string; weapon: string };
+          opponentBuild?: { chassis: string; arms: string; weapon: string };
           winner?: number | null;
           reason?: string;
           message?: string;
+          position?: number;
+          queueSize?: number;
         };
 
         switch (state.status) {
@@ -188,10 +223,20 @@ export function createArenaMcpServer(): McpServer {
           case "countdown":
             return txt("Match starting! Countdown in progress. Poll again in 1s.");
 
+          case "queued":
+            return txt(
+              `In queue (position ${state.position ?? "?"}/${state.queueSize ?? "?"}). Waiting for opponent... Poll again in 2-3s.`
+            );
+
           case "active": {
             const t = state.tactical!;
+            const myBuild = state.myBuild ?? t.myBuild;
+            const oppBuild = state.opponentBuild ?? t.opponentBuild;
             const lines = [
               `MATCH ACTIVE | Tick ${state.tick} | ${t.timeRemainingS.toFixed(1)}s left`,
+              ``,
+              `My build: ${myBuild ? `${myBuild.chassis}/${myBuild.arms}/${myBuild.weapon}` : "unknown"}`,
+              `Opponent build: ${oppBuild ? `${oppBuild.chassis}/${oppBuild.arms}/${oppBuild.weapon}` : "unknown"}`,
               ``,
               `Distance: ${t.distanceToOpponent.toFixed(2)}m | Closing: ${t.closingSpeed.toFixed(2)}m/s`,
               `Me: ${t.myDistFromCenter.toFixed(2)}m from center | Speed: ${t.mySpeed.toFixed(2)}m/s`,

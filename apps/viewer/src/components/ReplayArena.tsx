@@ -6,11 +6,13 @@ import { RobotMesh } from "./RobotMesh";
 import { ArenaFloor } from "./ArenaFloor";
 import { Lights } from "./Lights";
 import { ProjectileMesh } from "./ProjectileMesh";
+import type { RobotBuild } from "@/lib/types";
 
 interface ViewerRobotFrame {
   position: [number, number, number];
   rotation: [number, number, number, number];
   armAngles: [number, number];
+  build?: RobotBuild;
 }
 
 interface ViewerProjectileFrame {
@@ -27,9 +29,10 @@ interface ViewerFrame {
 
 interface ReplayArenaProps {
   frame: ViewerFrame | null;
+  agentBuilds?: { A: RobotBuild; B: RobotBuild };
 }
 
-function SceneContent({ frame }: ReplayArenaProps) {
+function SceneContent({ frame, agentBuilds }: ReplayArenaProps) {
   return (
     <>
       <Lights />
@@ -50,6 +53,7 @@ function SceneContent({ frame }: ReplayArenaProps) {
             armAngles={frame.robots[0].armAngles}
             color="#2266ff"
             emissiveColor="#4488ff"
+            build={frame.robots[0].build ?? agentBuilds?.A}
           />
           <RobotMesh
             position={frame.robots[1].position}
@@ -57,6 +61,7 @@ function SceneContent({ frame }: ReplayArenaProps) {
             armAngles={frame.robots[1].armAngles}
             color="#ff4422"
             emissiveColor="#ff6644"
+            build={frame.robots[1].build ?? agentBuilds?.B}
           />
 
           {/* Render projectiles in replay */}
@@ -73,7 +78,7 @@ function SceneContent({ frame }: ReplayArenaProps) {
   );
 }
 
-export function ReplayArena({ frame }: ReplayArenaProps) {
+export function ReplayArena({ frame, agentBuilds }: ReplayArenaProps) {
   return (
     <div className="w-full h-full">
       <Canvas
@@ -81,7 +86,7 @@ export function ReplayArena({ frame }: ReplayArenaProps) {
         camera={{ position: [0, 14, 18], fov: 50 }}
         style={{ background: "#0a0a1a" }}
       >
-        <SceneContent frame={frame} />
+        <SceneContent frame={frame} agentBuilds={agentBuilds} />
       </Canvas>
     </div>
   );

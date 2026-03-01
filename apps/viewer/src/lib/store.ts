@@ -6,6 +6,7 @@ import type {
   MatchEndMessage,
   LobbyStateMessage,
   AgentThoughts,
+  RobotBuild,
 } from "./types";
 
 interface ArenaStore {
@@ -33,6 +34,7 @@ interface ArenaStore {
   thoughts: { A: AgentThoughts; B: AgentThoughts } | null;
   round: number;
   agentNames: { A: string; B: string };
+  builds: { A: RobotBuild; B: RobotBuild } | null;
 
   // Lobby state
   queue: Array<{ name: string; position: number }>;
@@ -60,6 +62,7 @@ export const useArenaStore = create<ArenaStore>((set) => ({
   thoughts: null,
   round: 0,
   agentNames: { A: "Robot A", B: "Robot B" },
+  builds: null,
   queue: [],
   currentMatch: null,
 
@@ -74,6 +77,7 @@ export const useArenaStore = create<ArenaStore>((set) => ({
       thoughts: msg.thoughts ?? state.thoughts,
       round: msg.round ?? state.round,
       agentNames: msg.agentNames ?? state.agentNames,
+      builds: msg.builds ?? state.builds,
     })),
 
   setMatchEnd: (msg) =>
@@ -102,6 +106,7 @@ export const useArenaStore = create<ArenaStore>((set) => ({
       thoughts: null,
       round: 0,
       agentNames: { A: "Robot A", B: "Robot B" },
+      builds: null,
       queue: [],
       currentMatch: null,
     }),

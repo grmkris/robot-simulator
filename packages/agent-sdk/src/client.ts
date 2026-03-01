@@ -30,6 +30,7 @@ import type {
   WorldState,
   MatchPhase,
   TacticalContext,
+  RobotBuild,
 } from "@ai-arena/protocol";
 import { TICK_RATE } from "@ai-arena/protocol";
 
@@ -68,6 +69,8 @@ export interface ArenaClientOptions {
   onMatchEnd?: (winner: AgentId | null, reason: string) => void;
   /** Called on protocol errors */
   onError?: (error: string) => void;
+  /** Robot build configuration (optional, defaults to medium/standard/standard) */
+  build?: Partial<RobotBuild>;
 }
 
 export class ArenaClient {
@@ -90,6 +93,7 @@ export class ArenaClient {
         JSON.stringify({
           type: "join",
           name: this.options.name,
+          build: this.options.build,
         })
       );
     };
