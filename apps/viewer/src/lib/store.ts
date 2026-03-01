@@ -4,6 +4,7 @@ import type {
   ViewerProjectileState,
   ViewerStateMessage,
   MatchEndMessage,
+  LobbyStateMessage,
   AgentThoughts,
 } from "./types";
 
@@ -33,20 +34,18 @@ interface ArenaStore {
   round: number;
   agentNames: { A: string; B: string };
 
+  // Lobby state
+  queue: Array<{ name: string; position: number }>;
+  currentMatch: LobbyStateMessage["currentMatch"];
+
   // Actions
   updateState: (msg: ViewerStateMessage) => void;
   setMatchEnd: (msg: MatchEndMessage) => void;
+  updateLobby: (msg: LobbyStateMessage) => void;
   reset: () => void;
 }
 
-const defaultRobot: ViewerRobotState = {
-  id: "A",
-  position: [0, 0, 0],
-  rotation: [0, 0, 0, 1],
-  armAngles: [0, 0],
-};
-
-export const useArenaStore = create<ArenaStore>((set, get) => ({
+export const useArenaStore = create<ArenaStore>((set) => ({
   connected: false,
   setConnected: (v) => set({ connected: v }),
 
@@ -61,6 +60,8 @@ export const useArenaStore = create<ArenaStore>((set, get) => ({
   thoughts: null,
   round: 0,
   agentNames: { A: "Robot A", B: "Robot B" },
+  queue: [],
+  currentMatch: null,
 
   updateState: (msg) =>
     set((state) => ({
@@ -82,6 +83,12 @@ export const useArenaStore = create<ArenaStore>((set, get) => ({
       winReason: msg.reason,
     }),
 
+  updateLobby: (msg) =>
+    set({
+      queue: msg.queue,
+      currentMatch: msg.currentMatch,
+    }),
+
   reset: () =>
     set({
       tick: 0,
@@ -95,5 +102,7 @@ export const useArenaStore = create<ArenaStore>((set, get) => ({
       thoughts: null,
       round: 0,
       agentNames: { A: "Robot A", B: "Robot B" },
+      queue: [],
+      currentMatch: null,
     }),
 }));

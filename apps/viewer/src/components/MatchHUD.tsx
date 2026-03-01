@@ -10,12 +10,15 @@ function formatTime(seconds: number): string {
 }
 
 export function MatchHUD() {
-  const { tick, time, matchPhase, connected, winner, winReason, agentNames, round } =
+  const { tick, time, matchPhase, connected, winner, winReason, agentNames, round, queue } =
     useArenaStore();
+
+  // Don't show full HUD during waiting/disconnected — the LobbyView handles that
+  const showFullHUD = matchPhase === "active" || matchPhase === "countdown" || matchPhase === "finished";
 
   return (
     <div className="absolute top-0 left-0 right-0 z-10 pointer-events-none">
-      {/* Top bar */}
+      {/* Top bar — always visible */}
       <div className="flex justify-between items-start p-4">
         {/* Connection status */}
         <div className="flex items-center gap-2 bg-black/60 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto">
@@ -27,28 +30,35 @@ export function MatchHUD() {
           <span className="text-xs text-gray-300 font-mono">
             {connected ? "LIVE" : "OFFLINE"}
           </span>
+          {queue.length > 0 && matchPhase === "active" && (
+            <span className="text-xs text-gray-500 font-mono ml-1">
+              {queue.length} queued
+            </span>
+          )}
         </div>
 
         {/* Timer / Phase */}
-        <div className="bg-black/60 backdrop-blur rounded-lg px-4 py-2 text-center">
-          <div className="text-2xl font-mono font-bold text-white">
-            {matchPhase === "active" ? formatTime(time) : matchPhase.toUpperCase()}
+        {showFullHUD && (
+          <div className="bg-black/60 backdrop-blur rounded-lg px-4 py-2 text-center">
+            <div className="text-2xl font-mono font-bold text-white">
+              {matchPhase === "active" ? formatTime(time) : matchPhase.toUpperCase()}
+            </div>
+            <div className="text-xs text-gray-400 font-mono">
+              TICK {tick}
+              {matchPhase === "active" && round > 0 && (
+                <span className="ml-2 text-gray-500">R{round}</span>
+              )}
+            </div>
           </div>
-          <div className="text-xs text-gray-400 font-mono">
-            TICK {tick}
-            {matchPhase === "active" && round > 0 && (
-              <span className="ml-2 text-gray-500">R{round}</span>
-            )}
-          </div>
-        </div>
+        )}
 
-        {/* Phase badge + nav links */}
+        {/* Nav links */}
         <div className="flex items-center gap-2">
           <Link
-            href="/join"
-            className="bg-green-600/80 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto hover:bg-green-500/80 transition-colors"
+            href="/leaderboard"
+            className="bg-black/60 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto hover:bg-white/10 transition-colors"
           >
-            <span className="text-xs font-mono text-white font-bold">JOIN</span>
+            <span className="text-xs font-mono text-gray-300">RANKS</span>
           </Link>
           <Link
             href="/replays"
@@ -56,35 +66,58 @@ export function MatchHUD() {
           >
             <span className="text-xs font-mono text-gray-300">REPLAYS</span>
           </Link>
-          <div className="bg-black/60 backdrop-blur rounded-lg px-3 py-2">
-            <span
-              className={`text-xs font-mono font-bold ${
-                matchPhase === "active"
-                  ? "text-green-400"
-                  : matchPhase === "finished"
-                    ? "text-yellow-400"
-                    : "text-gray-400"
-              }`}
-            >
-              {matchPhase === "active" && "MIND GAMES"}
-              {matchPhase === "waiting" && "WAITING FOR AGENTS"}
-              {matchPhase === "countdown" && "GET READY"}
-              {matchPhase === "finished" && "MATCH OVER"}
-              {matchPhase === "disconnected" && "CONNECTING..."}
-            </span>
-          </div>
+          {showFullHUD && (
+            <div className="bg-black/60 backdrop-blur rounded-lg px-3 py-2">
+              <span
+                className={`text-xs font-mono font-bold ${
+                  matchPhase === "active"
+                    ? "text-green-400"
+                    : matchPhase === "finished"
+                      ? "text-yellow-400"
+                      : matchPhase === "countdown"
+                        ? "text-cyan-400"
+                        : "text-gray-400"
+                }`}
+              >
+                {matchPhase === "active" && "MIND GAMES"}
+                {matchPhase === "countdown" && "GET READY"}
+                {matchPhase === "finished" && "MATCH OVER"}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Robot labels — now showing agent names */}
-      <div className="flex justify-between px-8 mt-2">
-        <div className="bg-blue-600/60 backdrop-blur rounded-lg px-4 py-2">
-          <span className="text-sm font-bold text-white">{agentNames.A}</span>
+      {/* Robot labels — only during match */}
+      {showFullHUD && (
+        <div className="flex justify-between px-8 mt-2">
+          <div className="bg-blue-600/60 backdrop-blur rounded-lg px-4 py-2">
+            <span className="text-sm font-bold text-white">{agentNames.A}</span>
+          </div>
+          <div className="bg-red-600/60 backdrop-blur rounded-lg px-4 py-2">
+            <span className="text-sm font-bold text-white">{agentNames.B}</span>
+          </div>
         </div>
-        <div className="bg-red-600/60 backdrop-blur rounded-lg px-4 py-2">
-          <span className="text-sm font-bold text-white">{agentNames.B}</span>
+      )}
+
+      {/* Countdown overlay */}
+      {matchPhase === "countdown" && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-lg text-gray-400 font-mono mb-2">
+              <span className="text-blue-400">{agentNames.A}</span>
+              {" vs "}
+              <span className="text-red-400">{agentNames.B}</span>
+            </div>
+            <div className="text-8xl font-bold text-white animate-pulse">
+              {Math.max(1, Math.ceil(5 - time))}
+            </div>
+            <div className="text-sm text-cyan-400 font-mono mt-2 tracking-widest">
+              GET READY
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Match result overlay */}
       {matchPhase === "finished" && (
@@ -109,41 +142,10 @@ export function MatchHUD() {
             <div className="text-sm text-gray-400 font-mono uppercase">
               {winReason}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Waiting overlay */}
-      {(matchPhase === "disconnected" || matchPhase === "waiting") && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="bg-black/60 backdrop-blur rounded-xl px-8 py-6 text-center">
-            <div className="text-xl text-white font-mono mb-1">
-              AI ACTUATOR ARENA
-            </div>
-            <div className="text-xs text-purple-400 font-mono mb-3">
-              MIND GAMES EDITION
-            </div>
-            <div className="text-sm text-gray-400 font-mono">
-              {matchPhase === "disconnected"
-                ? "Connecting to server..."
-                : "Waiting for agents to connect..."}
-            </div>
-            <div className="mt-3 flex justify-center gap-1">
-              {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"
-                  style={{ animationDelay: `${i * 0.15}s` }}
-                />
-              ))}
-            </div>
-            {matchPhase === "waiting" && (
-              <Link
-                href="/join"
-                className="mt-4 inline-block bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg text-sm font-mono font-bold transition-colors pointer-events-auto"
-              >
-                HOW TO JOIN
-              </Link>
+            {queue.length > 0 && (
+              <div className="text-xs text-gray-500 font-mono mt-3">
+                Next match: {queue.length} agent{queue.length > 1 ? "s" : ""} in queue
+              </div>
             )}
           </div>
         </div>

@@ -44,4 +44,41 @@ export interface MatchEndMessage {
   reason: "ring_out" | "timeout" | "disconnect";
 }
 
-export type ServerViewerMessage = ViewerStateMessage | MatchEndMessage;
+/** Lobby state broadcast by server */
+export interface LobbyStateMessage {
+  type: "lobby";
+  queue: Array<{ name: string; position: number }>;
+  currentMatch: {
+    agentA: string;
+    agentB: string;
+    phase: string;
+    tick: number;
+    time: number;
+  } | null;
+}
+
+/** Leaderboard entry from REST API */
+export interface LeaderboardEntry {
+  rank: number;
+  agentName: string;
+  displayName: string;
+  wins: number;
+  losses: number;
+  draws: number;
+  elo: number;
+  matches: number;
+  winRate: number;
+}
+
+/** Match history entry from REST API */
+export interface MatchHistoryEntry {
+  matchId: string;
+  timestamp: string;
+  agentA: string;
+  agentB: string;
+  winner: 0 | 1 | null;
+  reason: string;
+  durationS: number;
+}
+
+export type ServerViewerMessage = ViewerStateMessage | MatchEndMessage | LobbyStateMessage;

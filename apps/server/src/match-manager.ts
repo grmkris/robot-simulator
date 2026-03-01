@@ -1,11 +1,11 @@
 /**
- * Match lifecycle orchestrator — HTTP Agent API Edition (v4).
+ * Match lifecycle orchestrator — Queue + Lobby Edition (v5).
  *
- * v4 changes: Agent-controlled movement + knockback projectiles.
- * - driveForce, turnRate, shoot fields in AgentAction
- * - Shoot flag consumed after one tick (fire-once semantics)
- * - Projectiles in game state, viewer broadcasts, and replay frames
- * - Expanded tactical context (facing angles, cooldowns, incoming projectiles)
+ * v5 changes: Agent queue, countdown phase, DB persistence, lobby broadcasts.
+ * - Agents join a queue instead of directly getting a slot
+ * - Server auto-pairs agents and starts matches with countdown
+ * - Match results recorded to SQLite for leaderboard
+ * - Lobby state broadcast to spectators via WebSocket
  */
 import { Simulation, GameLoop, initPhysics } from "@ai-arena/sim";
 import type { ActionProvider } from "@ai-arena/sim";
@@ -17,6 +17,10 @@ import type {
   TacticalContext,
   GameStateResponse,
   ViewerProjectileState,
+  QueueEntry,
+  LobbyState,
+  RobotBuild,
+  RobotConfig,
 } from "@ai-arena/protocol";
 import {
   ARENA_RADIUS,
@@ -25,6 +29,10 @@ import {
   MATCH_DURATION_S,
   VIEWER_BROADCAST_INTERVAL,
   AGENT_INACTIVITY_TIMEOUT_MS,
+  MAX_QUEUE_SIZE,
+  QUEUE_INACTIVITY_TIMEOUT_MS,
+  buildRobotConfig,
+  DEFAULT_BUILD,
 } from "@ai-arena/protocol";
 import type { WSContext } from "hono/ws";
 import {
@@ -32,77 +40,206 @@ import {
   generateMatchId,
   type ViewerFrame,
 } from "./replay-store.js";
+import { recordMatch } from "./db.js";
 
 const NO_OP: AgentAction = { leftArmTarget: 0, rightArmTarget: 0, driveForce: 0, turnRate: 0, shoot: false };
 
-interface ConnectedAgent {
-  /** Bearer token for HTTP auth */
-  token: string;
-  /** Display name */
+// ── Queue types ──
+
+interface QueuedAgent {
   name: string;
-  /** Persists between actions — the robot keeps doing this */
-  confirmedAction: AgentAction;
-  /** Timestamp of last poll (for inactivity detection) */
+  build: RobotBuild;
+  token: string;
+  joinedAt: number;
   lastPollTime: number;
-  /** Tick when last action was submitted */
+}
+
+// ── Active match agent ──
+
+interface ConnectedAgent {
+  token: string;
+  name: string;
+  build: RobotBuild;
+  confirmedAction: AgentAction;
+  lastPollTime: number;
   lastActionTick: number;
-  /** Public thought — visible to opponent + spectators */
   lastThought: string | null;
-  /** Private thought — visible to spectators only */
   lastPrivateThought: string | null;
 }
 
 export class MatchManager {
+  // ── Queue ──
+  private queue: QueuedAgent[] = [];
+  private tokenToQueue = new Map<string, QueuedAgent>();
+
+  // ── Active match ──
   private agents = new Map<AgentId, ConnectedAgent>();
   private tokenToAgent = new Map<string, AgentId>();
   private sim: Simulation | null = null;
   private loop: GameLoop | null = null;
   private _currentState: WorldState | null = null;
-  private spectators = new Set<WSContext>();
   private ticksSinceLastBroadcast = 0;
   private viewerFrameHistory: ViewerFrame[] = [];
   private inactivityTimer: ReturnType<typeof setInterval> | null = null;
-  /** Store last match result so agents can poll for it */
   private lastResult: MatchResult | null = null;
+  private currentMatchId: string | null = null;
 
-  get currentState(): WorldState | null {
-    return this._currentState;
+  // ── Spectators ──
+  private spectators = new Set<WSContext>();
+
+  // ── Queue cleanup timer ──
+  private queueCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor() {
+    // Clean inactive queue entries every 5 seconds
+    this.queueCleanupTimer = setInterval(() => this.cleanQueue(), 5000);
+  }
+
+  // ══════════════════════════════════════════
+  // Queue Management
+  // ══════════════════════════════════════════
+
+  get queueSize(): number {
+    return this.queue.length;
   }
 
   get agentCount(): number {
     return this.agents.size;
   }
 
-  // ══════════════════════════════════════════
-  // HTTP Agent API Methods
-  // ══════════════════════════════════════════
+  get isMatchActive(): boolean {
+    return this.sim !== null;
+  }
 
-  /** Register a new agent. Returns { agentId, token } or null if full. */
-  assignAgent(name: string): { agentId: AgentId; token: string } | null {
-    if (this.agents.size >= 2) return null;
+  /** Add an agent to the queue. Returns { token, position, build } or null if queue is full. */
+  enqueueAgent(name: string, build?: Partial<RobotBuild>): { token: string; position: number; build: RobotBuild } | null {
+    if (this.queue.length >= MAX_QUEUE_SIZE) return null;
 
-    const id: AgentId = this.agents.has(0) ? 1 : 0;
+    // Check if name is already in queue or active match
+    const nameLower = name.toLowerCase();
+    if (this.queue.some((q) => q.name.toLowerCase() === nameLower)) {
+      return null; // duplicate name in queue
+    }
+    for (const [, agent] of this.agents) {
+      if (agent.name.toLowerCase() === nameLower) {
+        return null; // already in active match
+      }
+    }
+
     const token = crypto.randomUUID();
+    const now = Date.now();
+    const resolvedBuild: RobotBuild = {
+      chassis: build?.chassis ?? DEFAULT_BUILD.chassis,
+      arms: build?.arms ?? DEFAULT_BUILD.arms,
+      weapon: build?.weapon ?? DEFAULT_BUILD.weapon,
+    };
+    const entry: QueuedAgent = { name, build: resolvedBuild, token, joinedAt: now, lastPollTime: now };
+    this.queue.push(entry);
+    this.tokenToQueue.set(token, entry);
 
-    this.agents.set(id, {
-      token,
-      name,
+    console.log(`[Queue] "${name}" joined queue (position ${this.queue.length}, token=${token.slice(0, 8)}...)`);
+    this.broadcastLobbyState();
+    this.tryMatchFromQueue();
+
+    return { token, position: this.queue.length, build: resolvedBuild };
+  }
+
+  /** Remove an agent from queue by token. */
+  dequeueByToken(token: string): boolean {
+    const entry = this.tokenToQueue.get(token);
+    if (!entry) return false;
+
+    this.queue = this.queue.filter((q) => q.token !== token);
+    this.tokenToQueue.delete(token);
+    console.log(`[Queue] "${entry.name}" left queue`);
+    this.broadcastLobbyState();
+    return true;
+  }
+
+  /** Get queue state for a token (returns position or null if not in queue). */
+  getQueuePosition(token: string): { position: number; queueSize: number } | null {
+    const entry = this.tokenToQueue.get(token);
+    if (!entry) return null;
+    entry.lastPollTime = Date.now();
+    const idx = this.queue.indexOf(entry);
+    if (idx === -1) return null;
+    return { position: idx + 1, queueSize: this.queue.length };
+  }
+
+  /** Clean out agents that haven't polled in QUEUE_INACTIVITY_TIMEOUT_MS */
+  private cleanQueue(): void {
+    const now = Date.now();
+    const before = this.queue.length;
+    this.queue = this.queue.filter((q) => {
+      if (now - q.lastPollTime > QUEUE_INACTIVITY_TIMEOUT_MS) {
+        console.log(`[Queue] "${q.name}" timed out (inactive ${((now - q.lastPollTime) / 1000).toFixed(0)}s)`);
+        this.tokenToQueue.delete(q.token);
+        return false;
+      }
+      return true;
+    });
+    if (this.queue.length !== before) {
+      this.broadcastLobbyState();
+    }
+  }
+
+  /** Try to pop 2 agents from queue and start a match. */
+  private tryMatchFromQueue(): void {
+    if (this.sim || this.agents.size > 0) return; // match already in progress
+    if (this.lastResult) return; // still in post-match window
+    if (this.queue.length < 2) return;
+
+    const agentA = this.queue.shift()!;
+    const agentB = this.queue.shift()!;
+    this.tokenToQueue.delete(agentA.token);
+    this.tokenToQueue.delete(agentB.token);
+
+    // Assign to match slots
+    this.agents.set(0, {
+      token: agentA.token,
+      name: agentA.name,
+      build: agentA.build,
       confirmedAction: { ...NO_OP },
       lastPollTime: Date.now(),
       lastActionTick: 0,
       lastThought: null,
       lastPrivateThought: null,
     });
-    this.tokenToAgent.set(token, id);
+    this.agents.set(1, {
+      token: agentB.token,
+      name: agentB.name,
+      build: agentB.build,
+      confirmedAction: { ...NO_OP },
+      lastPollTime: Date.now(),
+      lastActionTick: 0,
+      lastThought: null,
+      lastPrivateThought: null,
+    });
+    this.tokenToAgent.set(agentA.token, 0);
+    this.tokenToAgent.set(agentB.token, 1);
 
-    console.log(`[Match] Agent "${name}" assigned as Robot ${id} (token=${token.slice(0, 8)}...)`);
-    return { agentId: id, token };
+    console.log(`[Match] Matched "${agentA.name}" vs "${agentB.name}" from queue`);
+    this.broadcastLobbyState();
+    this.startMatch();
   }
 
-  /** Resolve a Bearer token to an AgentId (or null if invalid) */
+  // ══════════════════════════════════════════
+  // Token Resolution (queue OR active match)
+  // ══════════════════════════════════════════
+
+  /** Check if a token belongs to a queued agent */
+  isQueued(token: string): boolean {
+    return this.tokenToQueue.has(token);
+  }
+
+  /** Resolve a Bearer token to an AgentId (active match only, not queue) */
   resolveToken(token: string): AgentId | null {
     return this.tokenToAgent.get(token) ?? null;
   }
+
+  // ══════════════════════════════════════════
+  // Game State for Agents
+  // ══════════════════════════════════════════
 
   /** Build game state response for a specific agent */
   getGameStateForAgent(agentId: AgentId): GameStateResponse {
@@ -114,7 +251,6 @@ export class MatchManager {
 
     // No sim yet → waiting
     if (!this.sim || !this._currentState) {
-      // Match finished (result stored but sim cleaned up)
       if (this.lastResult) {
         return {
           status: "finished",
@@ -149,6 +285,7 @@ export class MatchManager {
     const opponent = this.agents.get(opponentId);
     const tactical = this.buildTacticalContext(state);
 
+    const opponentAgent = this.agents.get(opponentId);
     return {
       status: "active",
       tick: state.tick,
@@ -160,6 +297,8 @@ export class MatchManager {
       tactical: agentId === 0 ? tactical : this.flipTactical(tactical),
       yourLastAction: agent.confirmedAction,
       opponentLastThought: opponent?.lastThought ?? null,
+      myBuild: agent.build,
+      opponentBuild: opponentAgent?.build ?? DEFAULT_BUILD,
     };
   }
 
@@ -168,7 +307,6 @@ export class MatchManager {
     const agent = this.agents.get(agentId);
     if (!agent) return;
 
-    // Update confirmed action (persists until next submission)
     agent.confirmedAction = {
       leftArmTarget: action.leftArmTarget,
       rightArmTarget: action.rightArmTarget,
@@ -177,13 +315,10 @@ export class MatchManager {
       shoot: action.shoot ?? false,
     };
 
-    // Track thoughts
     agent.lastThought = action.thought ?? null;
     agent.lastPrivateThought = action.privateThought ?? null;
-
-    // Track timing
     agent.lastActionTick = this._currentState?.tick ?? 0;
-    agent.lastPollTime = Date.now(); // action counts as activity
+    agent.lastPollTime = Date.now();
 
     const thoughtPreview = agent.lastThought
       ? ` 💭 "${agent.lastThought.slice(0, 50)}"`
@@ -201,13 +336,12 @@ export class MatchManager {
       `[Match] Agent "${agent?.name}" (Robot ${agentId}) left`
     );
 
-    // Clean up token mapping
     if (agent) {
       this.tokenToAgent.delete(agent.token);
     }
     this.agents.delete(agentId);
 
-    if (this.sim && this.sim.phase === "active") {
+    if (this.sim && (this.sim.phase === "active" || this.sim.phase === "countdown")) {
       const winner: AgentId = agentId === 0 ? 1 : 0;
       this.handleMatchEnd({
         winner,
@@ -217,24 +351,46 @@ export class MatchManager {
     }
   }
 
-  /** Start a match if both agents are connected */
-  async tryStartMatch(): Promise<void> {
+  /** Handle leave by token — works for both queue and active match */
+  handleLeaveByToken(token: string): boolean {
+    // Check queue first
+    if (this.dequeueByToken(token)) return true;
+
+    // Check active match
+    const agentId = this.resolveToken(token);
+    if (agentId !== null) {
+      this.handleAgentLeave(agentId);
+      return true;
+    }
+
+    return false;
+  }
+
+  // ══════════════════════════════════════════
+  // Match Lifecycle
+  // ══════════════════════════════════════════
+
+  /** Start a match (called after 2 agents are paired from queue) */
+  private async startMatch(): Promise<void> {
     if (this.agents.size < 2 || this.sim) return;
 
     const agent0 = this.agents.get(0);
     const agent1 = this.agents.get(1);
     console.log(
-      `[Match] "${agent0?.name}" vs "${agent1?.name}" — Starting match...`
+      `[Match] "${agent0?.name}" vs "${agent1?.name}" — Starting match with countdown...`
     );
 
     await initPhysics();
     this.sim = new Simulation();
-    await this.sim.init();
+    const configs: [RobotConfig, RobotConfig] = [
+      buildRobotConfig(agent0!.build),
+      buildRobotConfig(agent1!.build),
+    ];
+    await this.sim.init(configs);
     this.viewerFrameHistory = [];
     this.lastResult = null;
+    this.currentMatchId = generateMatchId();
 
-    // ACTION PERSISTENCE: return confirmedAction (never null)
-    // SHOOT CONSUMPTION: shoot fires once then auto-resets to prevent multi-tick firing
     const actionProvider: ActionProvider = (
       agentId: AgentId,
       _state: WorldState
@@ -242,7 +398,6 @@ export class MatchManager {
       const agent = this.agents.get(agentId);
       if (!agent) return { ...NO_OP };
       const action = { ...agent.confirmedAction };
-      // Consume shoot flag — fire exactly once per submission
       if (action.shoot) {
         agent.confirmedAction.shoot = false;
       }
@@ -252,11 +407,8 @@ export class MatchManager {
     this.loop = new GameLoop(this.sim, actionProvider, {
       onTick: (state) => {
         this._currentState = state;
-
-        // Capture viewer frame for replay (with thoughts)
         this.captureViewerFrame(state);
 
-        // Throttle viewer broadcasts
         this.ticksSinceLastBroadcast++;
         if (this.ticksSinceLastBroadcast >= VIEWER_BROADCAST_INTERVAL) {
           this.broadcastToSpectators(state);
@@ -269,23 +421,20 @@ export class MatchManager {
     });
 
     this.loop.start();
-
-    // Start inactivity checker (1Hz)
     this.startInactivityChecker();
   }
 
   // ══════════════════════════════════════════
-  // Spectator WebSocket (unchanged)
+  // Spectator WebSocket
   // ══════════════════════════════════════════
 
-  /** Add a spectator WebSocket */
   addSpectator(ws: WSContext): void {
     this.spectators.add(ws);
     console.log(
       `[Match] Spectator connected (total: ${this.spectators.size})`
     );
 
-    // Send current state if available
+    // Send current match state if available
     if (this._currentState) {
       try {
         const state = this._currentState;
@@ -309,9 +458,11 @@ export class MatchManager {
         // ignore
       }
     }
+
+    // Always send lobby state on connect
+    this.sendLobbyStateTo(ws);
   }
 
-  /** Remove a spectator WebSocket */
   removeSpectator(ws: WSContext): void {
     this.spectators.delete(ws);
     console.log(
@@ -320,12 +471,63 @@ export class MatchManager {
   }
 
   // ══════════════════════════════════════════
+  // Lobby State Broadcasting
+  // ══════════════════════════════════════════
+
+  /** Build lobby state object */
+  buildLobbyState(): LobbyState {
+    const queue: QueueEntry[] = this.queue.map((q, i) => ({
+      name: q.name,
+      position: i + 1,
+      build: q.build,
+    }));
+
+    const agent0 = this.agents.get(0);
+    const agent1 = this.agents.get(1);
+    const currentMatch =
+      agent0 && agent1
+        ? {
+            agentA: agent0.name,
+            agentB: agent1.name,
+            phase: this._currentState?.matchPhase ?? ("waiting" as const),
+            tick: this._currentState?.tick ?? 0,
+            time: this._currentState?.elapsed ?? 0,
+          }
+        : null;
+
+    return { type: "lobby", queue, currentMatch };
+  }
+
+  /** Send lobby state to a single spectator */
+  private sendLobbyStateTo(ws: WSContext): void {
+    try {
+      ws.send(JSON.stringify(this.buildLobbyState()));
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Broadcast lobby state to all spectators */
+  broadcastLobbyState(): void {
+    const msg = JSON.stringify(this.buildLobbyState());
+    for (const ws of this.spectators) {
+      try {
+        ws.send(msg);
+      } catch {
+        this.spectators.delete(ws);
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════
   // Inactivity Detection
   // ══════════════════════════════════════════
 
   private startInactivityChecker(): void {
     this.inactivityTimer = setInterval(() => {
-      if (!this.sim || this.sim.phase !== "active") return;
+      if (!this.sim || this.sim.phase === "finished") return;
+      // Don't kick agents during countdown
+      if (this.sim.phase !== "active") return;
 
       const now = Date.now();
       for (const [id, agent] of this.agents) {
@@ -335,10 +537,10 @@ export class MatchManager {
             `[Match] Agent ${id} ("${agent.name}") forfeited: inactive for ${(inactiveMs / 1000).toFixed(1)}s`
           );
           this.handleAgentLeave(id);
-          return; // handleMatchEnd will clean up
+          return;
         }
       }
-    }, 1000); // Check every second
+    }, 1000);
   }
 
   private stopInactivityChecker(): void {
@@ -352,21 +554,18 @@ export class MatchManager {
   // Tactical Context
   // ══════════════════════════════════════════
 
-  /** Extract facing angle (radians from +Z) from chassis quaternion */
   private getFacingAngle(rot: { x: number; y: number; z: number; w: number }): number {
     const fw_x = 2 * (rot.x * rot.z + rot.w * rot.y);
     const fw_z = 1 - 2 * (rot.x * rot.x + rot.y * rot.y);
     return Math.atan2(fw_x, fw_z);
   }
 
-  /** Normalize angle to [-PI, PI] */
   private normalizeAngle(angle: number): number {
     while (angle > Math.PI) angle -= 2 * Math.PI;
     while (angle < -Math.PI) angle += 2 * Math.PI;
     return angle;
   }
 
-  /** Build tactical context from robot 0's perspective */
   private buildTacticalContext(state: WorldState): TacticalContext {
     const r0 = state.robots[0];
     const r1 = state.robots[1];
@@ -384,7 +583,6 @@ export class MatchManager {
       r1.chassis.position.z
     );
 
-    // Closing speed: positive = approaching
     const relVelX = r1.chassis.linvel.x - r0.chassis.linvel.x;
     const relVelZ = r1.chassis.linvel.z - r0.chassis.linvel.z;
     const dirX = distToOpponent > 0.01 ? dx / distToOpponent : 0;
@@ -397,23 +595,22 @@ export class MatchManager {
       r1.chassis.linvel.z
     );
 
-    // Facing angles
     const myFacingAngle = this.getFacingAngle(r0.chassis.rotation);
     const opponentFacingAngle = this.getFacingAngle(r1.chassis.rotation);
 
-    // Angle from my facing to opponent position (+ = right, - = left)
     const dirToOpponent = Math.atan2(dx, dz);
     const angleToOpponent = this.normalizeAngle(dirToOpponent - myFacingAngle);
 
-    // Cooldowns (in seconds)
     const cooldowns = this.sim?.agentCooldowns ?? [0, 0];
     const myCooldownS = Math.round(cooldowns[0] * TICK_DURATION_S * 100) / 100;
     const opponentCooldownS = Math.round(cooldowns[1] * TICK_DURATION_S * 100) / 100;
 
-    // Count incoming projectiles heading toward robot 0
     const incomingProjectiles = (state.projectiles ?? []).filter(
-      (p) => p.ownerId === 1 // fired by opponent (agent 1)
+      (p) => p.ownerId === 1
     ).length;
+
+    const agent0 = this.agents.get(0);
+    const agent1 = this.agents.get(1);
 
     return {
       distanceToOpponent: Math.round(distToOpponent * 100) / 100,
@@ -432,20 +629,17 @@ export class MatchManager {
       myCooldownS,
       opponentCooldownS,
       incomingProjectiles,
+      myBuild: agent0?.build ?? DEFAULT_BUILD,
+      opponentBuild: agent1?.build ?? DEFAULT_BUILD,
     };
   }
 
-  /** Flip tactical context for agent 1 (swap my/opponent) */
   private flipTactical(t: TacticalContext): TacticalContext {
-    // For agent 1, recalculate angleToOpponent from their perspective
-    // The flipped angle is approximately -angleToOpponent + PI (facing opposite)
-    // But it's simpler to note that agent 1's incoming projectiles are those owned by agent 0
     const state = this._currentState;
     const incomingForAgent1 = (state?.projectiles ?? []).filter(
-      (p) => p.ownerId === 0 // fired by agent 0
+      (p) => p.ownerId === 0
     ).length;
 
-    // Recompute angle to opponent from agent 1's perspective
     const r0 = state?.robots[0];
     const r1 = state?.robots[1];
     let angleToOpponent1 = 0;
@@ -468,6 +662,8 @@ export class MatchManager {
       myCooldownS: t.opponentCooldownS,
       opponentCooldownS: t.myCooldownS,
       incomingProjectiles: incomingForAgent1,
+      myBuild: t.opponentBuild,
+      opponentBuild: t.myBuild,
     };
   }
 
@@ -475,12 +671,17 @@ export class MatchManager {
   // Internal Helpers
   // ══════════════════════════════════════════
 
+  get currentState(): WorldState | null {
+    return this._currentState;
+  }
+
   private buildViewerRobot(
     label: string,
     r: WorldState["robots"][0]
   ): object {
     return {
       id: label,
+      build: r.build,
       position: [
         r.chassis.position.x,
         r.chassis.position.y,
@@ -522,10 +723,13 @@ export class MatchManager {
         A: a0?.name ?? "Robot A",
         B: a1?.name ?? "Robot B",
       },
+      builds: {
+        A: a0?.build ?? DEFAULT_BUILD,
+        B: a1?.build ?? DEFAULT_BUILD,
+      },
     };
   }
 
-  /** Capture a viewer frame for replay storage */
   private captureViewerFrame(state: WorldState): void {
     const r0 = state.robots[0];
     const r1 = state.robots[1];
@@ -537,44 +741,22 @@ export class MatchManager {
       time: state.elapsed,
       robots: [
         {
-          position: [
-            r0.chassis.position.x,
-            r0.chassis.position.y,
-            r0.chassis.position.z,
-          ],
-          rotation: [
-            r0.chassis.rotation.x,
-            r0.chassis.rotation.y,
-            r0.chassis.rotation.z,
-            r0.chassis.rotation.w,
-          ],
+          position: [r0.chassis.position.x, r0.chassis.position.y, r0.chassis.position.z],
+          rotation: [r0.chassis.rotation.x, r0.chassis.rotation.y, r0.chassis.rotation.z, r0.chassis.rotation.w],
           armAngles: [r0.leftArm.currentAngle, r0.rightArm.currentAngle],
+          build: a0?.build,
         },
         {
-          position: [
-            r1.chassis.position.x,
-            r1.chassis.position.y,
-            r1.chassis.position.z,
-          ],
-          rotation: [
-            r1.chassis.rotation.x,
-            r1.chassis.rotation.y,
-            r1.chassis.rotation.z,
-            r1.chassis.rotation.w,
-          ],
+          position: [r1.chassis.position.x, r1.chassis.position.y, r1.chassis.position.z],
+          rotation: [r1.chassis.rotation.x, r1.chassis.rotation.y, r1.chassis.rotation.z, r1.chassis.rotation.w],
           armAngles: [r1.leftArm.currentAngle, r1.rightArm.currentAngle],
+          build: a1?.build,
         },
       ],
       projectiles: this.buildViewerProjectiles(state),
       thoughts: {
-        A: {
-          thought: a0?.lastThought ?? null,
-          privateThought: a0?.lastPrivateThought ?? null,
-        },
-        B: {
-          thought: a1?.lastThought ?? null,
-          privateThought: a1?.lastPrivateThought ?? null,
-        },
+        A: { thought: a0?.lastThought ?? null, privateThought: a0?.lastPrivateThought ?? null },
+        B: { thought: a1?.lastThought ?? null, privateThought: a1?.lastPrivateThought ?? null },
       },
       round: 0,
     });
@@ -609,20 +791,39 @@ export class MatchManager {
     this.loop?.stop();
     this.stopInactivityChecker();
 
-    // Store result for polling
     this.lastResult = result;
+
+    const agent0 = this.agents.get(0);
+    const agent1 = this.agents.get(1);
+    const nameA = agent0?.name ?? "Robot A";
+    const nameB = agent1?.name ?? "Robot B";
 
     console.log(
       `[Match] Ended: winner=${result.winner ?? "DRAW"} reason=${result.reason} tick=${result.finalTick}`
     );
 
+    // Record to database
+    const durationS = result.finalTick / TICK_RATE;
+    try {
+      recordMatch(
+        this.currentMatchId ?? generateMatchId(),
+        nameA,
+        nameB,
+        result.winner,
+        result.reason,
+        result.finalTick,
+        durationS
+      );
+    } catch (err) {
+      console.error("[DB] Failed to record match:", err);
+    }
+
+    // Notify spectators
     const endMsg = JSON.stringify({
       type: "match_end",
       winner: result.winner,
       reason: result.reason,
     });
-
-    // Notify spectators (agents will see result via polling)
     for (const ws of this.spectators) {
       try {
         ws.send(endMsg);
@@ -631,19 +832,21 @@ export class MatchManager {
       }
     }
 
-    // Save replay with viewer frames (includes thoughts)
+    // Save replay
     if (this.sim) {
-      const matchId = generateMatchId();
-      const agentNames = {
-        A: this.agents.get(0)?.name ?? "Robot A",
-        B: this.agents.get(1)?.name ?? "Robot B",
+      const matchId = this.currentMatchId ?? generateMatchId();
+      const agentNames = { A: nameA, B: nameB };
+      const agentBuilds = {
+        A: agent0?.build ?? DEFAULT_BUILD,
+        B: agent1?.build ?? DEFAULT_BUILD,
       };
       saveReplay(
         matchId,
         result,
         this.sim.history,
         this.viewerFrameHistory,
-        agentNames
+        agentNames,
+        agentBuilds
       ).catch((err) => console.error("[Replay] Failed to save:", err));
     }
 
@@ -654,8 +857,9 @@ export class MatchManager {
     this._currentState = null;
     this.ticksSinceLastBroadcast = 0;
     this.viewerFrameHistory = [];
+    this.currentMatchId = null;
 
-    // Schedule full cleanup after agents have had time to poll for result
+    // Schedule full cleanup and next match
     setTimeout(() => {
       console.log("[Match] Full cleanup. Clearing agents and tokens.");
       for (const [, agent] of this.agents) {
@@ -663,7 +867,11 @@ export class MatchManager {
       }
       this.agents.clear();
       this.lastResult = null;
-      console.log("[Match] Reset. Waiting for new agents...");
-    }, 15_000); // 15 seconds for agents to see the result
+      this.broadcastLobbyState();
+
+      // Try to start the next match from queue
+      console.log(`[Match] Reset. Queue has ${this.queue.length} agents waiting.`);
+      this.tryMatchFromQueue();
+    }, 10_000);
   }
 }

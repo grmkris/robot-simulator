@@ -10,6 +10,7 @@ import type {
   AgentAction,
   AgentThoughts,
   MatchResult,
+  RobotBuild,
 } from "@ai-arena/protocol";
 
 export interface ReplayFrame {
@@ -40,6 +41,7 @@ export interface ViewerRobotFrame {
   position: [number, number, number];
   rotation: [number, number, number, number];
   armAngles: [number, number];
+  build?: RobotBuild;
 }
 
 export interface ReplayFile {
@@ -51,6 +53,8 @@ export interface ReplayFile {
   viewerFrames: ViewerFrame[];
   /** Agent display names */
   agentNames?: { A: string; B: string };
+  /** Agent builds */
+  agentBuilds?: { A: RobotBuild; B: RobotBuild };
 }
 
 /** Summary metadata for the replay list (no frame data) */
@@ -60,6 +64,7 @@ export interface ReplaySummary {
   result: MatchResult;
   frameCount: number;
   agentNames?: { A: string; B: string };
+  agentBuilds?: { A: RobotBuild; B: RobotBuild };
 }
 
 const REPLAY_DIR = process.env.REPLAY_DIR || "./data/replays";
@@ -72,7 +77,8 @@ export async function saveReplay(
   result: MatchResult,
   history: ReadonlyArray<{ tick: number; actions: [AgentAction, AgentAction] }>,
   viewerFrames: ReadonlyArray<ViewerFrame>,
-  agentNames?: { A: string; B: string }
+  agentNames?: { A: string; B: string },
+  agentBuilds?: { A: RobotBuild; B: RobotBuild }
 ): Promise<string> {
   await mkdir(REPLAY_DIR, { recursive: true });
 
@@ -87,6 +93,7 @@ export async function saveReplay(
     })),
     viewerFrames: viewerFrames as ViewerFrame[],
     agentNames,
+    agentBuilds,
   };
 
   const filePath = join(REPLAY_DIR, `${matchId}.json`);
@@ -149,6 +156,7 @@ export async function listReplaySummaries(): Promise<ReplaySummary[]> {
           result: replay.result,
           frameCount: replay.viewerFrames?.length ?? replay.frames.length,
           agentNames: replay.agentNames,
+          agentBuilds: replay.agentBuilds,
         });
       } catch {
         // skip corrupt files

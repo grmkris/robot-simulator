@@ -17,6 +17,18 @@ export const QuatSchema = z.object({
 
 export const AgentIdSchema = z.union([z.literal(0), z.literal(1)]);
 
+// ── Robot Build (must be before schemas that reference it) ──
+
+export const ChassisTypeSchema = z.enum(["light", "medium", "heavy"]);
+export const ArmsTypeSchema = z.enum(["short", "standard", "long"]);
+export const WeaponTypeSchema = z.enum(["rapid", "standard", "heavy"]);
+
+export const RobotBuildSchema = z.object({
+  chassis: ChassisTypeSchema.optional().default("medium"),
+  arms: ArmsTypeSchema.optional().default("standard"),
+  weapon: WeaponTypeSchema.optional().default("standard"),
+});
+
 // ── Agent Action ──
 
 export const AgentActionSchema = z.object({
@@ -46,6 +58,8 @@ export const TacticalContextSchema = z.object({
   myCooldownS: z.number(),
   opponentCooldownS: z.number(),
   incomingProjectiles: z.number().int(),
+  myBuild: RobotBuildSchema.optional(),
+  opponentBuild: RobotBuildSchema.optional(),
 });
 
 // ── Body / Arm / Robot State ──
@@ -65,6 +79,7 @@ export const ArmStateSchema = z.object({
 
 export const RobotStateSchema = z.object({
   id: AgentIdSchema,
+  build: RobotBuildSchema.optional(),
   chassis: BodyStateSchema,
   leftArm: ArmStateSchema,
   rightArm: ArmStateSchema,
@@ -82,4 +97,5 @@ export const MatchPhaseSchema = z.enum([
 
 export const JoinRequestSchema = z.object({
   name: z.string().min(1).max(32),
+  build: RobotBuildSchema.optional(),
 });

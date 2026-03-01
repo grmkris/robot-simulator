@@ -46,5 +46,13 @@ export const MAX_AGENTS = 2;
 export const VIEWER_BROADCAST_RATE = 30; // Hz
 export const VIEWER_BROADCAST_INTERVAL = Math.floor(TICK_RATE / VIEWER_BROADCAST_RATE);
 
+// ── Countdown ──
+export const COUNTDOWN_DURATION_S = 5;
+export const COUNTDOWN_DURATION_TICKS = COUNTDOWN_DURATION_S * TICK_RATE;
+
+// ── Queue ──
+export const MAX_QUEUE_SIZE = 10;
+export const QUEUE_INACTIVITY_TIMEOUT_MS = 60_000; // 60 seconds
+
 // ── Agent HTTP API ──
 export const AGENT_INACTIVITY_TIMEOUT_MS = 10_000; // 10 seconds

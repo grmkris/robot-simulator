@@ -1,309 +1,293 @@
-# Mind Games: AI Arena Upgrade Plan
+# Lobby + Leaderboard System — Implementation Plan
 
 ## Overview
-Transform from scripted 60Hz bots into an AI-powered arena where LLM agents make real decisions,
-emit visible thoughts, and try to outwit each other — all while spectators watch the inner monologue in real-time.
 
-Two core changes:
-1. **Slow Real-Time (2Hz decisions)** — physics runs at 60Hz, agents decide every 500ms, last action persists
-2. **Mind Games** — agents return thoughts (public + private) alongside actions, visible in viewer
+Transform the single-match "first two agents get slots" system into a proper lobby with queue, countdown, match history, and leaderboard. The server remains single-instance (Railway) but can now handle sequential matches automatically.
 
 ---
 
-## Step 1: Protocol Changes (`packages/protocol`)
+## Phase 1: Database Layer (`apps/server/src/db.ts`)
 
-### `src/constants.ts` — Add decision cadence constants
-```
-AGENT_DECISION_RATE = 2          // Hz
-AGENT_DECISION_INTERVAL = 30     // ticks between decisions (60/2)
-AGENT_DECISION_DEADLINE_MS = 4000 // hard timeout per window
-MATCH_DURATION_S = 60             // longer matches for slower decisions
-```
+**New file** — SQLite persistence using `bun:sqlite` (zero dependencies).
 
-### `src/types.ts` — Add thought types + tactical context
-```typescript
-// New: tactical summary (pre-computed for LLMs)
-interface TacticalContext {
-  distanceToOpponent: number;
-  myDistFromCenter: number;
-  opponentDistFromCenter: number;
-  closingSpeed: number;
-  mySpeed: number;
-  opponentSpeed: number;
-  timeRemainingS: number;
-  round: number;
-}
+### Schema
 
-// Extend AgentAction with optional thoughts
-interface AgentAction {
-  leftArmTarget: number;
-  rightArmTarget: number;
-  thought?: string;         // visible to opponent AND spectators
-  privateThought?: string;  // visible to spectators ONLY
-}
+```sql
+-- Match history (replaces reading JSON files for summaries)
+CREATE TABLE IF NOT EXISTS matches (
+  match_id   TEXT PRIMARY KEY,
+  timestamp  TEXT NOT NULL,
+  agent_a    TEXT NOT NULL,       -- name of agent 0
+  agent_b    TEXT NOT NULL,       -- name of agent 1
+  winner     INTEGER,            -- 0, 1, or NULL (draw)
+  reason     TEXT NOT NULL,       -- ring_out | timeout | disconnect
+  final_tick INTEGER NOT NULL,
+  duration_s REAL NOT NULL
+);
+
+-- Leaderboard (aggregated stats per agent name, case-insensitive)
+CREATE TABLE IF NOT EXISTS agent_stats (
+  agent_name TEXT PRIMARY KEY,   -- canonical lowercase name
+  display_name TEXT NOT NULL,    -- last-used casing
+  wins       INTEGER NOT NULL DEFAULT 0,
+  losses     INTEGER NOT NULL DEFAULT 0,
+  draws      INTEGER NOT NULL DEFAULT 0,
+  elo        REAL NOT NULL DEFAULT 1000,
+  last_seen  TEXT NOT NULL
+);
 ```
 
-### `src/messages.ts` — New decision_window message
-```typescript
-// Server -> Agent: sent every 500ms instead of every tick
-DecisionWindowMessage {
-  type: "decision_window"
-  round: number
-  tick: number
-  state: WorldState
-  tactical: TacticalContext
-  yourLastAction: AgentAction
-  opponentLastThought: string | null   // the opponent's public thought
-  deadline_ms: number
-}
+### Module exports
+- `initDb()` — create tables if not exist, path from `DB_PATH` env or `./data/arena.db`
+- `recordMatch(matchId, agentA, agentB, result)` — insert into `matches`, upsert `agent_stats` for both agents (winner gets +1 win, loser +1 loss, draw gets +1 draw each), update Elo ratings
+- `getLeaderboard(limit?)` — query `agent_stats` ordered by Elo desc
+- `getMatchHistory(limit?, agentName?)` — query `matches` ordered by timestamp desc, optional filter by agent name
+- `getAgentStats(name)` — single agent lookup
 
-// Agent -> Server: response with thoughts
-ActionMessage {
-  type: "action"
-  round: number   // changed from tick to round
-  action: AgentAction  // now includes thought + privateThought
-}
-```
-
-### `src/schemas.ts` — Zod schemas for new types
+### Elo rating
+Simple Elo: K=32, expected score = 1/(1+10^((Rb-Ra)/400)), update both players after each match. Draws count as 0.5.
 
 ---
 
-## Step 2: Server Match Manager (`apps/server/src/match-manager.ts`)
+## Phase 2: Queue + Countdown (`apps/server/src/match-manager.ts`)
 
-### Action Persistence
-Replace consume-and-null pattern with persist pattern:
+### Agent Queue
+
+Replace the current "assign slot directly" with a queue system:
+
 ```typescript
-// OLD: agent.pendingAction consumed, NO_OP if null
-// NEW: agent.confirmedAction persists until updated
-
-interface ConnectedAgent {
-  // ...existing fields...
-  confirmedAction: AgentAction;     // NEW: persists between decisions
-  lastDecisionRound: number;        // NEW: track which round was answered
-  consecutiveTimeouts: number;      // NEW: forfeit after 5 timeouts
-  lastThought: string | null;       // NEW: public thought for opponent to see
-  lastPrivateThought: string | null; // NEW: private thought for spectators
+interface QueuedAgent {
+  name: string;
+  token: string;
+  joinedAt: number;  // Date.now()
 }
+
+private queue: QueuedAgent[] = [];
 ```
 
-### Decision Cadence (2Hz)
-Replace per-tick broadcasts to agents with a 500ms interval:
-```
-- Stop sending tick messages to agents every frame
-- Start a setInterval(500ms) that sends decision_window messages
-- Include tactical context (pre-computed distances, speeds, time remaining)
-- Include opponent's last public thought
-- Apply deadline check: if agent misses 5 consecutive windows → forfeit
-```
+**New join flow:**
+1. `POST /api/join` → agent is added to `queue` (not directly assigned a slot)
+2. Response includes `{ token, position: queue.indexOf(agent) + 1 }`
+3. Agent polls `GET /api/game-state` with token:
+   - If still in queue → `{ status: "queued", position: N, queueSize: M }`
+   - If matched → existing flow (waiting/countdown/active/finished)
+4. After each match ends, server auto-pops next 2 agents from queue and starts countdown
 
-### Spectator Broadcasts — Add thoughts
-Include agent thoughts in spectator state messages:
-```typescript
-// In broadcastToSpectators:
-{
-  type: "state",
-  tick, time, robots, matchPhase,
-  // NEW fields:
-  thoughts: {
-    A: { thought: "...", privateThought: "..." },
-    B: { thought: "...", privateThought: "..." }
-  },
-  round: currentDecisionRound
-}
-```
+**Queue rules:**
+- Max queue size: 10 agents
+- Inactivity timeout: 60s without polling → removed from queue
+- Agent can `POST /api/leave` while queued → removed
 
-### Action Receipt
-```typescript
-receiveAction(agentId, round, action):
-  - Reject if round is too old (< currentRound - 1)
-  - Store action.thought as agent.lastThought
-  - Store action.privateThought as agent.lastPrivateThought
-  - Update agent.confirmedAction (persists until next decision)
-  - Reset agent.consecutiveTimeouts
-```
+### Countdown Phase
+
+After 2 agents are popped from queue and assigned to slots:
+
+1. `Simulation.init()` runs (robots spawn)
+2. Match phase = `"countdown"` for 5 seconds (300 ticks)
+3. During countdown: physics runs but actions are ignored (robots stand still)
+4. After countdown: phase transitions to `"active"`
+5. Viewer receives countdown state via WS broadcast
+
+Implementation: Add `COUNTDOWN_DURATION_S = 5` to `constants.ts`. In `Simulation`, track `countdownTicks` and skip action application until countdown expires.
+
+### Post-match flow
+
+After a match ends:
+1. Record result in DB via `recordMatch()`
+2. Save replay as before
+3. After 10-second result window, auto-pop next 2 from queue
+4. Agents that just finished are NOT auto-requeued (they must POST /join again if they want to play again)
 
 ---
 
-## Step 3: Agent SDK (`packages/agent-sdk/src/client.ts`)
+## Phase 3: New API Endpoints (`apps/server/src/main.ts`)
 
-### Async Brain Support
+Add these routes:
+
+```
+GET  /api/leaderboard          → { leaderboard: AgentStats[] }
+GET  /api/match-history        → { matches: MatchRecord[] }
+GET  /api/match-history/:agent → { matches: MatchRecord[] } (filtered)
+GET  /api/lobby                → { queue: QueueEntry[], currentMatch: MatchInfo | null }
+```
+
+### Lobby state (broadcast to spectator WS too)
+
+The spectator WebSocket will receive a new message type:
+
 ```typescript
-// OLD: synchronous only
-type AgentBrain = (agentId, state) => AgentAction;
-
-// NEW: async allowed, receives tactical context + opponent thought
-type AgentBrain = (
-  agentId: AgentId,
-  state: WorldState,
-  context: {
-    tactical: TacticalContext;
-    currentAction: AgentAction;
-    opponentThought: string | null;
-    round: number;
-  }
-) => AgentAction | Promise<AgentAction>;
-```
-
-### Handle decision_window message type
-```typescript
-case "decision_window":
-  const result = brain(agentId, state, context);
-  // Support both sync and async
-  Promise.resolve(result).then((action) => {
-    ws.send(JSON.stringify({ type: "action", round, action }));
-  });
-```
-
-### Backward Compatibility
-Keep handling "tick" messages for old-style agents (they'll work but with NO_OP persistence).
-
----
-
-## Step 4: Claude-Powered Agent (`agents/claude-agent/`)
-
-### New package: `@ai-arena/claude-agent`
-
-**Dependencies:** `@anthropic-ai/sdk`, `@ai-arena/agent-sdk`, `@ai-arena/protocol`
-
-### Brain function (async):
-```typescript
-async function claudeBrain(agentId, state, context): Promise<AgentAction> {
-  const response = await anthropic.messages.create({
-    model: "claude-haiku-4-5",  // fast + cheap for game decisions
-    max_tokens: 256,
-    system: FIGHTER_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: formatGameState(context) }],
-  });
-  // Parse structured JSON from response
-  return { leftArmTarget, rightArmTarget, thought, privateThought };
-}
-```
-
-### System prompt: personality + game rules + tactical advice
-```
-You are a robot fighter in an arena. You control two arms [-1, 1].
-You auto-charge toward your opponent. Your goal: push them off the edge.
-
-Respond with JSON: { left, right, thought, private }
-- left/right: arm angles (-1=back, 1=forward)
-- thought: what you say (opponent sees this!)
-- private: your real strategy (only spectators see)
-
-BE STRATEGIC: your thought is visible to your opponent.
-You can lie, bluff, intimidate, or be honest.
-```
-
-### Use Haiku for speed (~200ms), structured output for reliability
-
----
-
-## Step 5: Viewer Updates (`apps/viewer/`)
-
-### `src/lib/types.ts` — Add thought fields
-```typescript
-interface ViewerStateMessage {
-  // ...existing fields...
-  thoughts?: {
-    A: { thought: string | null; privateThought: string | null };
-    B: { thought: string | null; privateThought: string | null };
-  };
-  round?: number;
-}
-```
-
-### `src/lib/store.ts` — Store thoughts
-```typescript
-interface ArenaStore {
-  // ...existing fields...
-  thoughts: {
-    A: { thought: string | null; privateThought: string | null };
-    B: { thought: string | null; privateThought: string | null };
+interface LobbyStateMessage {
+  type: "lobby";
+  queue: Array<{ name: string; position: number }>;
+  currentMatch: {
+    agentA: string;
+    agentB: string;
+    phase: MatchPhase;
+    tick: number;
+    time: number;
   } | null;
-  round: number;
 }
 ```
 
-### New component: `src/components/ThoughtBubbles.tsx`
-Two speech bubble panels flanking the 3D arena:
-- Left side (blue): Robot A's thoughts
-- Right side (red): Robot B's thoughts
-- Public thought shown in quotes
-- Private thought shown in italics below (labeled "inner monologue")
-- Animate on change (fade in/slide)
-- Show "thinking..." when waiting for decision
-
-### `src/components/MatchHUD.tsx` — Add round counter + agent names
-- Show decision round number
-- Show agent names (from join message, forwarded in state)
-
-### Update `useMatchSocket.ts` — Parse new thought fields from state messages
+This is broadcast:
+- When queue changes (agent joins/leaves/matched)
+- Every 5 seconds as a heartbeat during waiting phase
+- Alongside `match_end` messages
 
 ---
 
-## Step 6: Replay System Updates
+## Phase 4: Protocol Changes (`packages/protocol/`)
 
-### `apps/server/src/replay-store.ts`
-Add thoughts to ViewerFrame:
+### New constants (`constants.ts`)
 ```typescript
-interface ViewerFrame {
-  // ...existing fields...
-  thoughts?: {
-    A: { thought: string | null; privateThought: string | null };
-    B: { thought: string | null; privateThought: string | null };
-  };
-  round?: number;
+export const COUNTDOWN_DURATION_S = 5;
+export const COUNTDOWN_DURATION_TICKS = COUNTDOWN_DURATION_S * TICK_RATE;
+export const MAX_QUEUE_SIZE = 10;
+export const QUEUE_INACTIVITY_TIMEOUT_MS = 60_000;
+```
+
+### Updated types (`types.ts`)
+
+Add to `GameStateResponse`:
+```typescript
+// New status value
+status: "waiting" | "queued" | "countdown" | "active" | "finished";
+// Queue info (when status = "queued")
+position?: number;
+queueSize?: number;
+```
+
+Add new exported types:
+```typescript
+export interface LeaderboardEntry {
+  agentName: string;
+  displayName: string;
+  wins: number;
+  losses: number;
+  draws: number;
+  elo: number;
+  matches: number;
+  winRate: number;
+}
+
+export interface MatchHistoryEntry {
+  matchId: string;
+  timestamp: string;
+  agentA: string;
+  agentB: string;
+  winner: AgentId | null;
+  reason: string;
+  durationS: number;
 }
 ```
 
-### Replay player — show thoughts during playback
-ThoughtBubbles component works in replay mode too (reads from frame data).
+---
+
+## Phase 5: Viewer UI (`apps/viewer/`)
+
+### Layout change
+
+The main page (`/`) gets a **sidebar layout** when not in active match. During active matches, the 3D arena is fullscreen as before. During waiting/queue, show a lobby view.
+
+### New/Updated Components
+
+**`LobbyView.tsx`** — shown when `matchPhase === "waiting" || "disconnected"`:
+- Top section: Animated title "AI ACTUATOR ARENA"
+- Queue panel: list of queued agents with position numbers
+- Mini leaderboard: top 10 agents by Elo
+- Recent matches: last 5 match results with links to replays
+- "Next match" preview when 2+ agents are queued
+
+**`Leaderboard.tsx`** — reusable leaderboard table:
+- Columns: Rank, Name, Elo, W/L/D, Win%, Matches
+- Color coding: gold/silver/bronze for top 3
+- Click agent name to see their match history
+
+**`MatchHistory.tsx`** — reusable match list (used in both lobby and /replays page):
+- Shows matchups, results, duration, timestamps
+- Links to replay viewer
+
+**Updated `MatchHUD.tsx`**:
+- Show countdown timer (big "3... 2... 1... FIGHT!" overlay)
+- Show queue size indicator during active match ("3 in queue")
+
+### New pages
+
+**`/leaderboard`** — full leaderboard page with all agents, sortable columns
+**Update `/replays`** — integrate with DB-backed match history instead of raw file listing
+
+### Store changes (`lib/store.ts`)
+
+Add to `ArenaStore`:
+```typescript
+// Lobby state
+queue: Array<{ name: string; position: number }>;
+leaderboard: LeaderboardEntry[];
+recentMatches: MatchHistoryEntry[];
+
+// New WS message handler
+updateLobby: (msg: LobbyStateMessage) => void;
+```
+
+### Data fetching
+
+- Leaderboard + match history: fetched via REST on page load, refreshed after each match ends
+- Queue state: pushed via WS `lobby` message type (real-time)
 
 ---
 
-## Step 7: WebSocket Handler Updates (`apps/server/src/ws-handler.ts`)
+## Phase 6: Viewer API Proxy Routes (`apps/viewer/src/app/api/`)
 
-### Forward agent names to spectators
-When agents join, broadcast their names so the viewer can display them.
+Add proxy routes (Next.js API routes that forward to the game server, avoiding CORS):
 
-### Validate new message schemas
-Update ClientMessageSchema to accept round-based actions with thoughts.
+```
+GET /api/leaderboard    → proxy to server /api/leaderboard
+GET /api/match-history  → proxy to server /api/match-history
+GET /api/lobby          → proxy to server /api/lobby
+```
+
+(Pattern already exists: `/api/config` and `/api/replays` are proxied this way.)
 
 ---
 
 ## File Change Summary
 
-| File | Change |
-|------|--------|
-| `packages/protocol/src/constants.ts` | Add decision cadence constants |
-| `packages/protocol/src/types.ts` | Add TacticalContext, extend AgentAction with thoughts |
-| `packages/protocol/src/messages.ts` | Add DecisionWindowMessage, update ActionMessage |
-| `packages/protocol/src/schemas.ts` | Add Zod schemas for new types |
-| `apps/server/src/match-manager.ts` | Action persistence, 2Hz cadence, thought tracking, tactical context |
-| `apps/server/src/ws-handler.ts` | Handle round-based actions, forward agent names |
-| `apps/server/src/replay-store.ts` | Add thoughts to ViewerFrame |
-| `packages/agent-sdk/src/client.ts` | Async brain, decision_window handling |
-| `agents/claude-agent/package.json` | NEW: Claude-powered agent package |
-| `agents/claude-agent/src/index.ts` | NEW: Claude brain function |
-| `agents/claude-agent/src/main.ts` | NEW: Entry point |
-| `agents/claude-agent/tsconfig.json` | NEW: TypeScript config |
-| `agents/heuristic-agent/src/index.ts` | Adapt to new brain signature (add thoughts) |
-| `agents/random-agent/src/index.ts` | Adapt to new brain signature |
-| `agents/aggressive-agent/src/index.ts` | Adapt to new brain signature |
-| `apps/viewer/src/lib/types.ts` | Add thoughts to ViewerStateMessage |
-| `apps/viewer/src/lib/store.ts` | Store thoughts in Zustand |
-| `apps/viewer/src/hooks/useMatchSocket.ts` | Parse thoughts from state |
-| `apps/viewer/src/components/ThoughtBubbles.tsx` | NEW: Speech bubble panels |
-| `apps/viewer/src/components/MatchHUD.tsx` | Show round, agent names |
-| `apps/viewer/src/app/replays/[id]/page.tsx` | Show thoughts in replay |
-| `apps/server/Dockerfile` | Add claude-agent to COPY |
+### New files
+| File | Purpose |
+|------|---------|
+| `apps/server/src/db.ts` | SQLite database layer |
+| `apps/viewer/src/components/LobbyView.tsx` | Lobby waiting screen with queue + leaderboard |
+| `apps/viewer/src/components/Leaderboard.tsx` | Leaderboard table component |
+| `apps/viewer/src/app/leaderboard/page.tsx` | Full leaderboard page |
+| `apps/viewer/src/app/api/leaderboard/route.ts` | Proxy to server |
+| `apps/viewer/src/app/api/match-history/route.ts` | Proxy to server |
+| `apps/viewer/src/app/api/lobby/route.ts` | Proxy to server |
 
-## Build Order
-1. Protocol types + schemas (foundation)
-2. Server match-manager (core logic)
-3. Agent SDK (async brain)
-4. Update existing agents (adapt signatures)
-5. Claude agent (new package)
-6. Viewer (thoughts display)
-7. Replay system (thoughts in frames)
-8. Deploy + test
+### Modified files
+| File | Changes |
+|------|---------|
+| `packages/protocol/src/constants.ts` | Add countdown + queue constants |
+| `packages/protocol/src/types.ts` | Add `"queued"` status, LeaderboardEntry, MatchHistoryEntry types |
+| `packages/protocol/src/schemas.ts` | (minor, if needed for new response validation) |
+| `apps/server/src/main.ts` | Add leaderboard/history/lobby routes, init DB |
+| `apps/server/src/match-manager.ts` | Queue system, countdown, DB recording, lobby broadcasts |
+| `apps/server/src/http-agent-handler.ts` | Update join response (queue position), handle "queued" status |
+| `apps/viewer/src/lib/store.ts` | Add queue/leaderboard/recentMatches state |
+| `apps/viewer/src/lib/types.ts` | Add LobbyStateMessage type |
+| `apps/viewer/src/hooks/useMatchSocket.ts` | Handle "lobby" WS message type |
+| `apps/viewer/src/app/page.tsx` | Conditional render: LobbyView vs Arena3D |
+| `apps/viewer/src/components/MatchHUD.tsx` | Countdown overlay, queue indicator |
+| `apps/viewer/src/app/replays/page.tsx` | Use DB-backed match history |
+
+---
+
+## Implementation Order
+
+1. **Phase 1** — Database layer (standalone, no breaking changes)
+2. **Phase 4** — Protocol types + constants (foundation for everything)
+3. **Phase 2** — Queue + countdown in MatchManager (backward-compatible: single agent joining still works)
+4. **Phase 3** — New API endpoints
+5. **Phase 6** — Viewer proxy routes (trivial, follows existing pattern)
+6. **Phase 5** — Viewer UI (can start once API exists)
+
+Each phase is independently deployable. The old `POST /api/join` → immediate match flow still works when exactly 2 agents join (they just go through the queue instantly).

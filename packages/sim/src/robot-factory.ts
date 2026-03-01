@@ -1,21 +1,15 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import type { AgentId, AgentAction } from "@ai-arena/protocol";
+import type { RobotConfig } from "@ai-arena/protocol";
 import {
-  CHASSIS_HALF_EXTENTS,
-  ARM_HALF_EXTENTS,
-  CHASSIS_MASS,
-  ARM_MASS,
   ARM_ANGLE_MIN,
   ARM_ANGLE_MAX,
-  ARM_MOTOR_STIFFNESS,
-  ARM_MOTOR_DAMPING,
-  CHASSIS_MAX_SPEED,
-  CHASSIS_MAX_ANGULAR_SPEED,
 } from "@ai-arena/protocol";
 
 /** A fully-constructed robot with physics bodies and joints */
 export interface Robot {
   id: AgentId;
+  config: RobotConfig;
   chassis: RAPIER.RigidBody;
   leftArm: RAPIER.RigidBody;
   rightArm: RAPIER.RigidBody;
@@ -34,8 +28,10 @@ export class RobotFactory {
    * Create a robot at a given position with an optional facing angle.
    * @param facingAngleY — rotation around Y axis in radians (0 = facing +Z)
    */
-  create(id: AgentId, spawnX: number, spawnZ: number, facingAngleY?: number): Robot {
-    const spawnY = CHASSIS_HALF_EXTENTS.y + 0.05;
+  create(id: AgentId, spawnX: number, spawnZ: number, facingAngleY: number | undefined, config: RobotConfig): Robot {
+    const che = config.chassisHalfExtents;
+    const ahe = config.armHalfExtents;
+    const spawnY = che.y + 0.05;
 
     // ── Chassis ──
     const chassisDesc = RAPIER.RigidBodyDesc.dynamic()
@@ -53,17 +49,9 @@ export class RobotFactory {
 
     const chassis = this.world.createRigidBody(chassisDesc);
 
-    const chassisVol =
-      8 *
-      CHASSIS_HALF_EXTENTS.x *
-      CHASSIS_HALF_EXTENTS.y *
-      CHASSIS_HALF_EXTENTS.z;
-    const chassisCollider = RAPIER.ColliderDesc.cuboid(
-      CHASSIS_HALF_EXTENTS.x,
-      CHASSIS_HALF_EXTENTS.y,
-      CHASSIS_HALF_EXTENTS.z
-    )
-      .setDensity(CHASSIS_MASS / chassisVol)
+    const chassisVol = 8 * che.x * che.y * che.z;
+    const chassisCollider = RAPIER.ColliderDesc.cuboid(che.x, che.y, che.z)
+      .setDensity(config.chassisMass / chassisVol)
       .setFriction(0.8)
       .setRestitution(0.05); // near-zero bounce to prevent collision catapult
     this.world.createCollider(chassisCollider, chassis);
@@ -72,28 +60,26 @@ export class RobotFactory {
     chassis.setAngularDamping(4.0); // high angular damping for stable turning
 
     // ── Arm placement (account for chassis rotation!) ──
-    // Local X-axis offset for arms, rotated by facingAngleY around Y.
-    // Y-rotation: local +X → world (cos θ, 0, -sin θ)
     const angle = facingAngleY ?? 0;
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
 
     // Left arm: local offset (-CHASSIS_HX - ARM_HX, 0, 0)
-    const leftLocalX = -(CHASSIS_HALF_EXTENTS.x + ARM_HALF_EXTENTS.x);
+    const leftLocalX = -(che.x + ahe.x);
     const leftArmWorldX = spawnX + leftLocalX * cosA;
     const leftArmWorldZ = spawnZ + leftLocalX * (-sinA);
-    const leftArm = this.createArmBody(leftArmWorldX, spawnY, leftArmWorldZ, facingAngleY);
+    const leftArm = this.createArmBody(leftArmWorldX, spawnY, leftArmWorldZ, facingAngleY, ahe, config.armMass);
 
     // Right arm: local offset (+CHASSIS_HX + ARM_HX, 0, 0)
-    const rightLocalX = CHASSIS_HALF_EXTENTS.x + ARM_HALF_EXTENTS.x;
+    const rightLocalX = che.x + ahe.x;
     const rightArmWorldX = spawnX + rightLocalX * cosA;
     const rightArmWorldZ = spawnZ + rightLocalX * (-sinA);
-    const rightArm = this.createArmBody(rightArmWorldX, spawnY, rightArmWorldZ, facingAngleY);
+    const rightArm = this.createArmBody(rightArmWorldX, spawnY, rightArmWorldZ, facingAngleY, ahe, config.armMass);
 
     // ── Revolute Joints (rotate around Y axis) ──
     const leftJointData = RAPIER.JointData.revolute(
-      new RAPIER.Vector3(-CHASSIS_HALF_EXTENTS.x, 0, 0),
-      new RAPIER.Vector3(ARM_HALF_EXTENTS.x, 0, 0),
+      new RAPIER.Vector3(-che.x, 0, 0),
+      new RAPIER.Vector3(ahe.x, 0, 0),
       new RAPIER.Vector3(0, 1, 0)
     );
     leftJointData.limitsEnabled = true;
@@ -106,8 +92,8 @@ export class RobotFactory {
     );
 
     const rightJointData = RAPIER.JointData.revolute(
-      new RAPIER.Vector3(CHASSIS_HALF_EXTENTS.x, 0, 0),
-      new RAPIER.Vector3(-ARM_HALF_EXTENTS.x, 0, 0),
+      new RAPIER.Vector3(che.x, 0, 0),
+      new RAPIER.Vector3(-ahe.x, 0, 0),
       new RAPIER.Vector3(0, 1, 0)
     );
     rightJointData.limitsEnabled = true;
@@ -119,14 +105,16 @@ export class RobotFactory {
       true
     );
 
-    return { id, chassis, leftArm, rightArm, leftJoint, rightJoint };
+    return { id, config, chassis, leftArm, rightArm, leftJoint, rightJoint };
   }
 
   private createArmBody(
     x: number,
     y: number,
     z: number,
-    facingAngleY?: number
+    facingAngleY: number | undefined,
+    ahe: { x: number; y: number; z: number },
+    armMass: number,
   ): RAPIER.RigidBody {
     const desc = RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z);
     // Rotate arm to match chassis facing direction
@@ -140,14 +128,9 @@ export class RobotFactory {
     }
     const body = this.world.createRigidBody(desc);
 
-    const armVol =
-      8 * ARM_HALF_EXTENTS.x * ARM_HALF_EXTENTS.y * ARM_HALF_EXTENTS.z;
-    const collider = RAPIER.ColliderDesc.cuboid(
-      ARM_HALF_EXTENTS.x,
-      ARM_HALF_EXTENTS.y,
-      ARM_HALF_EXTENTS.z
-    )
-      .setDensity(ARM_MASS / armVol)
+    const armVol = 8 * ahe.x * ahe.y * ahe.z;
+    const collider = RAPIER.ColliderDesc.cuboid(ahe.x, ahe.y, ahe.z)
+      .setDensity(armMass / armVol)
       .setFriction(0.6)
       .setRestitution(0.05); // near-zero bounce
     this.world.createCollider(collider, body);
@@ -170,13 +153,13 @@ export function applyArmAction(robot: Robot, action: AgentAction): void {
 
   (robot.leftJoint as RAPIER.RevoluteImpulseJoint).configureMotorPosition(
     leftTarget,
-    ARM_MOTOR_STIFFNESS,
-    ARM_MOTOR_DAMPING
+    robot.config.armMotorStiffness,
+    robot.config.armMotorDamping
   );
   (robot.rightJoint as RAPIER.RevoluteImpulseJoint).configureMotorPosition(
     rightTarget,
-    ARM_MOTOR_STIFFNESS,
-    ARM_MOTOR_DAMPING
+    robot.config.armMotorStiffness,
+    robot.config.armMotorDamping
   );
 }
 
@@ -228,7 +211,7 @@ function applyAgentDrive(robot: Robot, normalizedForce: number): void {
   const latZ = vel.z - fwdSpeed * fw_z;
 
   // Set forward speed directly to agent's target
-  const targetFwd = normalizedForce * CHASSIS_MAX_SPEED;
+  const targetFwd = normalizedForce * robot.config.maxSpeed;
 
   // Dampen lateral drift (from knockback/collisions) — decay 8% per tick
   const latDamp = 0.92;
@@ -246,7 +229,7 @@ function applyAgentDrive(robot: Robot, normalizedForce: number): void {
  * Sets angular velocity directly to target.
  */
 function applyAgentTurn(robot: Robot, normalizedTurn: number): void {
-  const targetAngVel = normalizedTurn * CHASSIS_MAX_ANGULAR_SPEED;
+  const targetAngVel = normalizedTurn * robot.config.maxAngularSpeed;
 
   const angvel = robot.chassis.angvel();
   robot.chassis.setAngvel(

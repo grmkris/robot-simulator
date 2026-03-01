@@ -48,10 +48,10 @@ export default function ReplaysPage() {
           </div>
           <div className="flex gap-2">
             <Link
-              href="/join"
-              className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-mono font-bold transition-colors"
+              href="/leaderboard"
+              className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-mono transition-colors"
             >
-              JOIN
+              RANKS
             </Link>
             <Link
               href="/"

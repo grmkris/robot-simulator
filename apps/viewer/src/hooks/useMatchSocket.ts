@@ -11,7 +11,7 @@ import type { ServerViewerMessage } from "@/lib/types";
 export function useMatchSocket(serverUrl: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { setConnected, updateState, setMatchEnd, reset } = useArenaStore();
+  const { setConnected, updateState, setMatchEnd, updateLobby, reset } = useArenaStore();
 
   useEffect(() => {
     if (!serverUrl) return; // Wait until URL is resolved
@@ -40,6 +40,8 @@ export function useMatchSocket(serverUrl: string | null) {
             updateState(msg);
           } else if (msg.type === "match_end") {
             setMatchEnd(msg);
+          } else if (msg.type === "lobby") {
+            updateLobby(msg);
           }
         } catch {
           // ignore malformed messages
@@ -67,5 +69,5 @@ export function useMatchSocket(serverUrl: string | null) {
       wsRef.current?.close();
       reset();
     };
-  }, [serverUrl, setConnected, updateState, setMatchEnd, reset]);
+  }, [serverUrl, setConnected, updateState, setMatchEnd, updateLobby, reset]);
 }

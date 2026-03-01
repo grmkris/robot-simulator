@@ -29,6 +29,7 @@ import type {
   WorldState,
   GameStateResponse,
   TacticalContext,
+  RobotBuild,
 } from "@ai-arena/protocol";
 import { TICK_RATE } from "@ai-arena/protocol";
 import type { DecisionContext } from "./client.js";
@@ -56,6 +57,8 @@ export interface ArenaHttpClientOptions {
   onMatchEnd?: (winner: AgentId | null, reason: string) => void;
   /** Called on errors */
   onError?: (error: string) => void;
+  /** Robot build configuration (optional, defaults to medium/standard/standard) */
+  build?: Partial<RobotBuild>;
 }
 
 export class ArenaHttpClient {
@@ -79,7 +82,7 @@ export class ArenaHttpClient {
     const joinRes = await fetch(`${serverUrl}/api/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, build: this.options.build }),
     });
 
     if (!joinRes.ok) {
@@ -92,16 +95,18 @@ export class ArenaHttpClient {
 
     const joinData = await joinRes.json() as {
       token: string;
-      agentId: AgentId;
+      position?: number;
+      agentId?: AgentId;
       config: { arenaRadius: number; tickRate: number; matchDurationS: number };
     };
 
     this.token = joinData.token;
-    this.agentId = joinData.agentId;
+    // agentId is assigned when match starts, not at join time anymore
+    this.agentId = joinData.agentId ?? null;
     this.running = true;
 
     console.log(
-      `[${name}] Joined as Robot ${this.agentId}. ` +
+      `[${name}] Joined queue (position ${joinData.position ?? "?"}). ` +
       `Arena: radius=${joinData.config.arenaRadius}, ` +
       `tick=${joinData.config.tickRate}Hz, ` +
       `duration=${joinData.config.matchDurationS}s`
@@ -155,12 +160,28 @@ export class ArenaHttpClient {
         const state = await res.json() as GameStateResponse;
 
         switch (state.status) {
+          case "queued":
+            // In queue, waiting to be matched
+            if (state.position !== undefined) {
+              console.log(`[${name}] Queue position: ${state.position}/${state.queueSize ?? "?"}`);
+            }
+            break;
+
           case "waiting":
           case "countdown":
-            // Not ready yet, just poll again
+            // Matched but not started yet, or in countdown
+            if (state.you !== undefined && this.agentId === null) {
+              this.agentId = state.you;
+              console.log(`[${name}] Assigned as Robot ${this.agentId}`);
+            }
             break;
 
           case "active": {
+            // Learn agentId from first active state
+            if (state.you !== undefined && this.agentId === null) {
+              this.agentId = state.you;
+              console.log(`[${name}] Assigned as Robot ${this.agentId}`);
+            }
             // Build WorldState for the brain
             if (state.robots && state.you !== undefined && state.tick !== undefined) {
               const worldState: WorldState = {

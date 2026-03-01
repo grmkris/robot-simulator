@@ -73,6 +73,7 @@ export function extractRobotState(
   const chassisPos = robot.chassis.translation();
   return {
     id: robot.id,
+    build: robot.config.build,
     chassis: extractBodyState(robot.chassis),
     leftArm: extractArmState(
       robot.leftArm,

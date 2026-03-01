@@ -6,21 +6,18 @@ import type {
   MatchResult,
   WorldState,
 } from "@ai-arena/protocol";
+import type { RobotConfig } from "@ai-arena/protocol";
 import {
+  TICK_RATE,
   TICK_DURATION_S,
   MATCH_DURATION_TICKS,
   RING_OUT_Y_THRESHOLD,
   ARENA_RADIUS,
   RING_OUT_DISTANCE_MARGIN,
-  CHASSIS_HALF_EXTENTS,
-  CHASSIS_MASS,
-  CHASSIS_MAX_SPEED,
-  CHASSIS_MAX_ANGULAR_SPEED,
-  PROJECTILE_SPEED,
-  PROJECTILE_COOLDOWN_TICKS,
-  PROJECTILE_KNOCKBACK_IMPULSE,
   PROJECTILE_LIFETIME_TICKS,
   PROJECTILE_RADIUS,
+  COUNTDOWN_DURATION_TICKS,
+  buildRobotConfig,
 } from "@ai-arena/protocol";
 import { Arena } from "./arena.js";
 import { RobotFactory, applyArmAction, applyMovementAction, getFacingDirection } from "./robot-factory.js";
@@ -72,8 +69,10 @@ export class Simulation {
   private world!: RAPIER.World;
   private arena!: Arena;
   private robots!: [Robot, Robot];
+  private configs!: [RobotConfig, RobotConfig];
   private tick = 0;
-  private matchPhase: MatchPhase = "active";
+  private matchPhase: MatchPhase = "countdown";
+  private countdownTicks = COUNTDOWN_DURATION_TICKS;
   private lastActions: [AgentAction, AgentAction] = [
     { ...NO_OP },
     { ...NO_OP },
@@ -97,7 +96,9 @@ export class Simulation {
   // ── Stun ticks: robot loses drive/turn control while stunned ──
   private stunTicks: [number, number] = [0, 0];
 
-  async init(): Promise<void> {
+  async init(configs?: [RobotConfig, RobotConfig]): Promise<void> {
+    this.configs = configs ?? [buildRobotConfig(), buildRobotConfig()];
+
     this.world = new RAPIER.World(new RAPIER.Vector3(0, -9.81, 0));
     this.arena = new Arena(this.world);
 
@@ -105,9 +106,9 @@ export class Simulation {
     const spawnOffset = ARENA_RADIUS * 0.4; // 4m from center with radius=10
 
     // Robot 0 at -X, facing +X (angle = PI/2)
-    const robot0 = factory.create(0, -spawnOffset, 0, Math.PI / 2);
+    const robot0 = factory.create(0, -spawnOffset, 0, Math.PI / 2, this.configs[0]);
     // Robot 1 at +X, facing -X (angle = -PI/2)
-    const robot1 = factory.create(1, spawnOffset, 0, -Math.PI / 2);
+    const robot1 = factory.create(1, spawnOffset, 0, -Math.PI / 2, this.configs[1]);
     this.robots = [robot0, robot1];
   }
 
@@ -122,6 +123,15 @@ export class Simulation {
       this.matchPhase,
       this.getProjectileSnapshots()
     );
+
+    // Countdown → active transition
+    if (this.matchPhase === "countdown") {
+      this.countdownTicks--;
+      if (this.countdownTicks <= 0) {
+        this.matchPhase = "active";
+        this.tick = 0; // reset tick counter for the actual match
+      }
+    }
 
     if (this.matchPhase === "active") {
       const action0 = actionProvider(0, preState);
@@ -197,11 +207,10 @@ export class Simulation {
 
   /** Clamp all robot body velocities to prevent explosive collisions */
   private clampRobotVelocities(): void {
-    // Allow 2x max speed as headroom for knockback, but no more
-    const maxLinearSpeed = CHASSIS_MAX_SPEED * 2.5;
-    const maxAngularSpeed = CHASSIS_MAX_ANGULAR_SPEED * 2;
-
     for (const robot of this.robots) {
+      const config = robot.config;
+      const maxLinearSpeed = config.maxSpeed * 2.5;
+      const maxAngularSpeed = config.maxAngularSpeed * 2;
       // Clamp chassis linear velocity (XZ only, preserve Y for gravity)
       const vel = robot.chassis.linvel();
       const hSpeed = Math.hypot(vel.x, vel.z);
@@ -246,11 +255,12 @@ export class Simulation {
     if (this.cooldowns[agentId] > 0) return; // still on cooldown
 
     const robot = this.robots[agentId];
+    const config = robot.config;
     const pos = robot.chassis.translation();
     const [fx, fz] = getFacingDirection(robot.chassis);
 
-    // Spawn slightly in front of chassis
-    const spawnDist = CHASSIS_HALF_EXTENTS.z + PROJECTILE_RADIUS + 0.15;
+    // Spawn slightly in front of chassis (use per-robot chassis size)
+    const spawnDist = config.chassisHalfExtents.z + PROJECTILE_RADIUS + 0.15;
     const spawnX = pos.x + fx * spawnDist;
     const spawnZ = pos.z + fz * spawnDist;
     const spawnY = pos.y;
@@ -269,13 +279,14 @@ export class Simulation {
       id: this.nextProjectileId++,
       ownerId: agentId,
       body,
-      velocity: { x: fx * PROJECTILE_SPEED, z: fz * PROJECTILE_SPEED },
+      velocity: { x: fx * config.projectileSpeed, z: fz * config.projectileSpeed },
       ticksAlive: 0,
       maxTicks: PROJECTILE_LIFETIME_TICKS,
       hit: false,
     });
 
-    this.cooldowns[agentId] = PROJECTILE_COOLDOWN_TICKS;
+    const cooldownTicks = Math.ceil(config.projectileCooldownMs / (1000 / TICK_RATE));
+    this.cooldowns[agentId] = cooldownTicks;
     console.log(`[Sim] Agent ${agentId} fired projectile #${this.nextProjectileId - 1}`);
   }
 
@@ -298,6 +309,8 @@ export class Simulation {
 
       const opponentId: AgentId = proj.ownerId === 0 ? 1 : 0;
       const opponent = this.robots[opponentId];
+      const shooterConfig = this.configs[proj.ownerId];
+      const victimConfig = this.configs[opponentId];
 
       // Manual distance-based hit detection (reliable across Rapier versions)
       const projPos = proj.body.translation();
@@ -306,8 +319,8 @@ export class Simulation {
       const dz = projPos.z - oppPos.z;
       const dist = Math.hypot(dx, dz);
 
-      // Hit radius = projectile radius + chassis half-extent (generous bounding)
-      const hitRadius = PROJECTILE_RADIUS + CHASSIS_HALF_EXTENTS.x * 1.2;
+      // Hit radius = projectile radius + victim chassis half-extent (generous bounding)
+      const hitRadius = PROJECTILE_RADIUS + victimConfig.chassisHalfExtents.x * 1.2;
 
       if (dist < hitRadius) {
         // HIT! Add knockback velocity (persists alongside drive, decays over time)
@@ -315,17 +328,18 @@ export class Simulation {
         const pushDz = oppPos.z - projPos.z;
         const pushDist = Math.hypot(pushDx, pushDz) || 1;
 
-        // Convert impulse to velocity: v = impulse / mass
-        const kbSpeed = PROJECTILE_KNOCKBACK_IMPULSE / CHASSIS_MASS;
+        // Knockback: shooter's impulse / victim's mass * victim's knockback multiplier
+        const kbSpeed = (shooterConfig.projectileKnockbackImpulse / victimConfig.chassisMass)
+          * victimConfig.knockbackMultiplier;
         this.knockback[opponentId].x += (pushDx / pushDist) * kbSpeed;
         this.knockback[opponentId].z += (pushDz / pushDist) * kbSpeed;
 
-        // Stun: disable drive/turn for 15 ticks (0.25s)
-        this.stunTicks[opponentId] = 15;
+        // Stun: use victim's stun duration
+        this.stunTicks[opponentId] = victimConfig.stunTicks;
 
         proj.hit = true;
         console.log(
-          `[Sim] Projectile #${proj.id} hit Robot ${opponentId}! Knockback ${kbSpeed.toFixed(1)} m/s, stunned 0.25s`
+          `[Sim] Projectile #${proj.id} hit Robot ${opponentId}! Knockback ${kbSpeed.toFixed(1)} m/s, stunned ${(victimConfig.stunTicks / TICK_RATE).toFixed(2)}s`
         );
       }
     }
@@ -446,6 +460,12 @@ export class Simulation {
   }
   get agentCooldowns(): [number, number] {
     return [...this.cooldowns] as [number, number];
+  }
+  get countdownRemaining(): number {
+    return this.countdownTicks;
+  }
+  get robotConfigs(): [RobotConfig, RobotConfig] {
+    return this.configs;
   }
 
   getWorldState(): WorldState {

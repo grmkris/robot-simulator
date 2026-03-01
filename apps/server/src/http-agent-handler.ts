@@ -2,10 +2,10 @@
  * HTTP Agent API routes.
  *
  * Agents interact via simple REST endpoints:
- *   POST /join       → register, get a Bearer token
+ *   POST /join       → join the queue, get a Bearer token
  *   GET  /game-state → poll current state (heartbeat)
  *   POST /action     → submit arm targets + thoughts
- *   POST /leave      → voluntarily disconnect
+ *   POST /leave      → voluntarily disconnect (from queue or match)
  *
  * Any language can play — just use curl!
  */
@@ -47,17 +47,15 @@ export function createAgentRoutes(matchManager: MatchManager): Hono {
       );
     }
 
-    const result = matchManager.assignAgent(parsed.data.name);
+    const result = matchManager.enqueueAgent(parsed.data.name, parsed.data.build);
     if (!result) {
-      return c.json({ error: "Match is full (2 agents max)" }, 409);
+      return c.json({ error: "Queue is full or name is already taken" }, 409);
     }
-
-    // Try to start match (succeeds when both agents joined)
-    matchManager.tryStartMatch();
 
     return c.json({
       token: result.token,
-      agentId: result.agentId,
+      position: result.position,
+      build: result.build,
       protocolVersion: PROTOCOL_VERSION,
       config: {
         arenaRadius: ARENA_RADIUS,
@@ -74,6 +72,17 @@ export function createAgentRoutes(matchManager: MatchManager): Hono {
       return c.json({ error: "Missing Authorization: Bearer <token>" }, 401);
     }
 
+    // Check if agent is still in queue
+    const queuePos = matchManager.getQueuePosition(token);
+    if (queuePos) {
+      return c.json({
+        status: "queued",
+        position: queuePos.position,
+        queueSize: queuePos.queueSize,
+      });
+    }
+
+    // Check if agent is in active match
     const agentId = matchManager.resolveToken(token);
     if (agentId === null) {
       return c.json({ error: "Invalid or expired token" }, 401);
@@ -99,7 +108,7 @@ export function createAgentRoutes(matchManager: MatchManager): Hono {
     try {
       const text = await c.req.text();
       body = JSON.parse(text);
-    } catch (e) {
+    } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
@@ -126,12 +135,11 @@ export function createAgentRoutes(matchManager: MatchManager): Hono {
       return c.json({ error: "Missing Authorization: Bearer <token>" }, 401);
     }
 
-    const agentId = matchManager.resolveToken(token);
-    if (agentId === null) {
+    const left = matchManager.handleLeaveByToken(token);
+    if (!left) {
       return c.json({ error: "Invalid or expired token" }, 401);
     }
 
-    matchManager.handleAgentLeave(agentId);
     return c.json({ ok: true });
   });
 

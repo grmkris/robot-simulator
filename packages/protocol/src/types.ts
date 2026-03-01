@@ -1,3 +1,5 @@
+import type { RobotBuild } from "./builds.js";
+
 /** 3D vector — plain serializable object */
 export interface Vec3 {
   x: number;
@@ -31,6 +33,7 @@ export interface ArmState {
 /** Complete robot state for one agent */
 export interface RobotState {
   id: AgentId;
+  build: RobotBuild;
   chassis: BodyState;
   leftArm: ArmState;
   rightArm: ArmState;
@@ -90,6 +93,10 @@ export interface TacticalContext {
   opponentCooldownS: number;
   /** Number of projectiles currently heading toward me */
   incomingProjectiles: number;
+  /** My robot build */
+  myBuild: RobotBuild;
+  /** Opponent's robot build */
+  opponentBuild: RobotBuild;
 }
 
 /** Agent thought state for viewer/replay */
@@ -123,6 +130,7 @@ export interface MatchResult {
 /** Viewer-optimized state (sent at VIEWER_BROADCAST_RATE) */
 export interface ViewerRobotState {
   id: string;
+  build?: RobotBuild;
   position: [number, number, number];
   rotation: [number, number, number, number];
   armAngles: [number, number];
@@ -145,6 +153,8 @@ export interface ViewerState {
   round?: number;
   /** Agent names */
   agentNames?: { A: string; B: string };
+  /** Robot builds */
+  builds?: { A: RobotBuild; B: RobotBuild };
 }
 
 // ═══════════════════════════════════════════════
@@ -154,7 +164,8 @@ export interface ViewerState {
 /** Response from POST /api/join */
 export interface JoinResponse {
   token: string;
-  agentId: AgentId;
+  position: number;
+  build: RobotBuild;
   config: {
     arenaRadius: number;
     tickRate: number;
@@ -164,7 +175,7 @@ export interface JoinResponse {
 
 /** Response from GET /api/game-state */
 export interface GameStateResponse {
-  status: "waiting" | "countdown" | "active" | "finished";
+  status: "waiting" | "queued" | "countdown" | "active" | "finished";
   tick?: number;
   elapsed?: number;
   you?: AgentId;
@@ -174,6 +185,12 @@ export interface GameStateResponse {
   tactical?: TacticalContext;
   yourLastAction?: AgentAction;
   opponentLastThought?: string | null;
+  // Build info
+  myBuild?: RobotBuild;
+  opponentBuild?: RobotBuild;
+  // Queue info (when status = "queued")
+  position?: number;
+  queueSize?: number;
   // Finished state
   winner?: AgentId | null;
   reason?: string;
@@ -184,4 +201,51 @@ export interface GameStateResponse {
 export interface ActionResponse {
   ok: boolean;
   tick: number;
+}
+
+// ═══════════════════════════════════════════════
+// Lobby / Leaderboard Types
+// ═══════════════════════════════════════════════
+
+/** Leaderboard entry for a single agent */
+export interface LeaderboardEntry {
+  agentName: string;
+  displayName: string;
+  wins: number;
+  losses: number;
+  draws: number;
+  elo: number;
+  matches: number;
+  winRate: number;
+}
+
+/** Match history entry */
+export interface MatchHistoryEntry {
+  matchId: string;
+  timestamp: string;
+  agentA: string;
+  agentB: string;
+  winner: AgentId | null;
+  reason: string;
+  durationS: number;
+}
+
+/** Queue entry visible to viewers */
+export interface QueueEntry {
+  name: string;
+  position: number;
+  build: RobotBuild;
+}
+
+/** Lobby state broadcast to spectators */
+export interface LobbyState {
+  type: "lobby";
+  queue: QueueEntry[];
+  currentMatch: {
+    agentA: string;
+    agentB: string;
+    phase: MatchPhase;
+    tick: number;
+    time: number;
+  } | null;
 }
