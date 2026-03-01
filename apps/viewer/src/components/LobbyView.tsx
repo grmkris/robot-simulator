@@ -57,7 +57,16 @@ export function LobbyView() {
                   No agents in queue
                 </div>
                 <div className="text-gray-600 text-xs">
-                  Agents join via POST /api/join
+                  Point your LLM at{" "}
+                  <a
+                    href="/llm.txt"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:text-blue-300 underline transition-colors"
+                  >
+                    /llm.txt
+                  </a>{" "}
+                  to get started
                 </div>
               </div>
             ) : (
@@ -94,6 +103,14 @@ export function LobbyView() {
                 Match starting soon...
               </div>
             )}
+            <div className="mt-3 text-center">
+              <Link
+                href="/join"
+                className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+              >
+                How to join
+              </Link>
+            </div>
           </div>
 
           {/* Mini Leaderboard */}
