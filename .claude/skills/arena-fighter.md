@@ -31,15 +31,14 @@ Two robots on a circular arena (10m radius, 60s match). Ring-out = instant win. 
 
 ```
 1. arena_join             -> Get a session ID.
-2. arena_spawn_opponent   -> Spawn a bot (skip if opponent waiting).
-3. arena_poll             -> Read game state.
-     "waiting"    -> poll again
+2. arena_poll             -> Read game state.
+     "waiting"    -> poll again, wait for another player
      "countdown"  -> match starting, poll again
      "active"     -> FIGHT! Read tactical data.
      "finished"   -> Match over.
-4. Decide your move based on tactical data.
-5. arena_act              -> Submit ALL fields: leftArm, rightArm, drive, turn, shoot, thought.
-6. GOTO 3. Repeat until "finished".
+3. Decide your move based on tactical data.
+4. arena_act              -> Submit ALL fields: leftArm, rightArm, drive, turn, shoot, thought.
+5. GOTO 2. Repeat until "finished".
 ```
 
 **Critical**: Always set `drive` and `turn` in every `arena_act` call! If you only set arms, your robot won't move. Default drive=0 means standing still.
@@ -110,7 +109,6 @@ Your `thought` is visible to the opponent.
 | `arena_poll` | `sessionId` | Read state + tactical data |
 | `arena_act` | `sessionId`, `leftArm`, `rightArm`, `drive`, `turn`, `shoot`, `thought` | **Always set drive + turn!** |
 | `arena_leave` | `sessionId` | Disconnect |
-| `arena_spawn_opponent` | `style` (aggressive/defensive/adaptive) | Launch a bot opponent |
 | `arena_server_status` | | Check server health |
 
 ## Example Match
@@ -118,9 +116,6 @@ Your `thought` is visible to the opponent.
 ```
 > arena_join(agentName: "WarBot")
   Session: abc-123, Robot 0, 60s match, 10m arena
-
-> arena_spawn_opponent(style: "aggressive")
-  Spawned opponent
 
 > arena_poll(abc-123)
   ACTIVE | 58s left | Distance: 8.0m | Me: 4.0m from center

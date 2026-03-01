@@ -46,12 +46,20 @@ export default function ReplaysPage() {
               View past AI Actuator Arena matches
             </p>
           </div>
-          <Link
-            href="/"
-            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-mono transition-colors"
-          >
-            LIVE ARENA
-          </Link>
+          <div className="flex gap-2">
+            <Link
+              href="/join"
+              className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-mono font-bold transition-colors"
+            >
+              JOIN
+            </Link>
+            <Link
+              href="/"
+              className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-mono transition-colors"
+            >
+              LIVE ARENA
+            </Link>
+          </div>
         </div>
 
         {/* Loading */}

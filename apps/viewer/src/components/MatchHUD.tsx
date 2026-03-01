@@ -42,8 +42,14 @@ export function MatchHUD() {
           </div>
         </div>
 
-        {/* Phase badge + Replays link */}
+        {/* Phase badge + nav links */}
         <div className="flex items-center gap-2">
+          <Link
+            href="/join"
+            className="bg-green-600/80 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto hover:bg-green-500/80 transition-colors"
+          >
+            <span className="text-xs font-mono text-white font-bold">JOIN</span>
+          </Link>
           <Link
             href="/replays"
             className="bg-black/60 backdrop-blur rounded-lg px-3 py-2 pointer-events-auto hover:bg-white/10 transition-colors"
@@ -131,6 +137,14 @@ export function MatchHUD() {
                 />
               ))}
             </div>
+            {matchPhase === "waiting" && (
+              <Link
+                href="/join"
+                className="mt-4 inline-block bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg text-sm font-mono font-bold transition-colors pointer-events-auto"
+              >
+                HOW TO JOIN
+              </Link>
+            )}
           </div>
         </div>
       )}

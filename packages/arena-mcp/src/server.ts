@@ -9,7 +9,6 @@
  *   arena_poll            → Read current game state & tactical data
  *   arena_act             → Submit arm positions + public thought (mind games!)
  *   arena_leave           → Disconnect
- *   arena_spawn_opponent  → Launch a heuristic bot to fight against
  *   arena_server_status   → Check if server is online
  *   arena_list_replays    → List past match replays
  */
@@ -48,9 +47,6 @@ function txt(text: string) {
   return { content: [{ type: "text" as const, text }] };
 }
 
-// ─── Active heuristic opponents (for cleanup) ──────────────────
-const activeOpponents = new Map<string, AbortController>();
-
 // ─── Server factory ────────────────────────────────────────────
 export function createArenaMcpServer(): McpServer {
   const server = new McpServer({
@@ -65,7 +61,7 @@ export function createArenaMcpServer(): McpServer {
     "arena_join",
     "Join the AI Actuator Arena as a robot fighter. " +
       "Returns a session ID for use with arena_poll and arena_act. " +
-      "A match starts when two robots are connected — use arena_spawn_opponent to create one if needed.",
+      "A match starts when two robots are connected.",
     {
       serverUrl: z
         .string()
@@ -122,7 +118,7 @@ export function createArenaMcpServer(): McpServer {
             `  3. arena_act → submit arm positions (-1 to +1) + public thought`,
             `  4. Repeat until match ends`,
             ``,
-            `If no opponent is waiting, use arena_spawn_opponent to create a heuristic bot.`,
+            `If no opponent is waiting, share the join instructions and wait for another player.`,
             `Watch live: ${VIEWER_URL}`,
           ].join("\n")
         );
@@ -186,7 +182,7 @@ export function createArenaMcpServer(): McpServer {
         switch (state.status) {
           case "waiting":
             return txt(
-              "Waiting for opponent... Poll again in 2-3s, or use arena_spawn_opponent."
+              "Waiting for opponent... Poll again in 2-3s."
             );
 
           case "countdown":
@@ -343,66 +339,6 @@ export function createArenaMcpServer(): McpServer {
   );
 
   // ═══════════════════════════════════════════════════════════════
-  // TOOL: arena_spawn_opponent
-  // ═══════════════════════════════════════════════════════════════
-  server.tool(
-    "arena_spawn_opponent",
-    "Spawn a heuristic bot opponent so you have someone to fight. " +
-      "The bot runs in the background with an adaptive strategy. " +
-      "Call this after arena_join if no opponent is waiting.",
-    {
-      serverUrl: z
-        .string()
-        .url()
-        .default(DEFAULT_SERVER_URL)
-        .describe("Arena server URL"),
-      botName: z
-        .string()
-        .max(32)
-        .default("HeuristicBot")
-        .describe("Display name for the bot opponent"),
-      style: z
-        .enum(["aggressive", "defensive", "adaptive"])
-        .default("adaptive")
-        .describe("Bot fighting style"),
-    },
-    async ({ serverUrl, botName, style }) => {
-      // Join as the bot
-      try {
-        const res = await fetch(`${serverUrl}/api/join`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: botName }),
-        });
-
-        if (!res.ok) {
-          const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-          return txt(`Bot join failed: ${err.error ?? res.statusText}`);
-        }
-
-        const data = (await res.json()) as { token: string; agentId: number };
-        const { token, agentId } = data;
-
-        // Run the heuristic bot in the background
-        const ac = new AbortController();
-        const opponentId = randomUUID();
-        activeOpponents.set(opponentId, ac);
-
-        runHeuristicBot(serverUrl, token, agentId, style, ac.signal).finally(() => {
-          activeOpponents.delete(opponentId);
-        });
-
-        return txt(
-          `Spawned "${botName}" (${style} style) as Robot ${agentId}.\n` +
-            `The bot is playing in the background. Go fight it!`
-        );
-      } catch (err) {
-        return txt(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-  );
-
-  // ═══════════════════════════════════════════════════════════════
   // TOOL: arena_server_status
   // ═══════════════════════════════════════════════════════════════
   server.tool(
@@ -493,133 +429,3 @@ export function createArenaMcpServer(): McpServer {
   return server;
 }
 
-// ─── Heuristic bot logic ───────────────────────────────────────
-async function runHeuristicBot(
-  serverUrl: string,
-  token: string,
-  agentId: number,
-  style: "aggressive" | "defensive" | "adaptive",
-  signal: AbortSignal
-): Promise<void> {
-  const maxDuration = 180_000;
-  const start = Date.now();
-
-  while (!signal.aborted && Date.now() - start < maxDuration) {
-    try {
-      const res = await fetch(`${serverUrl}/api/game-state`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!res.ok) {
-        if (res.status === 401) return;
-        await sleep(1000);
-        continue;
-      }
-
-      const state = (await res.json()) as {
-        status: string;
-        tick?: number;
-        tactical?: {
-          distanceToOpponent: number;
-          myDistFromCenter: number;
-          opponentDistFromCenter: number;
-          closingSpeed: number;
-        };
-      };
-
-      if (state.status === "finished") return;
-      if (state.status === "waiting" || state.status === "countdown") {
-        await sleep(1000);
-        continue;
-      }
-
-      if (state.status === "active" && state.tactical) {
-        const t = state.tactical;
-        const tick = state.tick ?? 0;
-        const { left, right, thought } = heuristicDecision(tick, t, style);
-
-        // Drive toward opponent (full forward when far, ease off when close)
-        const driveForce = t.distanceToOpponent > 2 ? 1 : 0.5;
-        // Turn toward opponent (simplified: always drive forward)
-        const turnRate = 0;
-
-        await fetch(`${serverUrl}/api/action`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            leftArmTarget: left,
-            rightArmTarget: right,
-            driveForce,
-            turnRate,
-            shoot: t.distanceToOpponent < 5,
-            thought,
-            privateThought: `[${style}] tick ${tick}`,
-          }),
-        });
-      }
-    } catch {
-      // network blip — retry
-    }
-
-    await sleep(500);
-  }
-}
-
-function heuristicDecision(
-  tick: number,
-  t: {
-    distanceToOpponent: number;
-    myDistFromCenter: number;
-    opponentDistFromCenter: number;
-    closingSpeed: number;
-  },
-  style: "aggressive" | "defensive" | "adaptive"
-): { left: number; right: number; thought: string } {
-  // Aggressive: always windmill, full send
-  if (style === "aggressive") {
-    const l = Math.sin(tick * 0.15 * Math.PI * 2);
-    const r = Math.sin(tick * 0.15 * Math.PI * 2 + Math.PI);
-    return { left: l, right: r, thought: "MAXIMUM VIOLENCE!" };
-  }
-
-  // Defensive: stay compact, counter-punch
-  if (style === "defensive") {
-    if (t.distanceToOpponent < 2) {
-      return { left: 1, right: 1, thought: "Counter!" };
-    }
-    return { left: -0.5, right: -0.5, thought: "Come at me." };
-  }
-
-  // Adaptive: context-dependent
-  if (t.distanceToOpponent < 2.5) {
-    // Close: windmill
-    const l = Math.sin(tick * 0.15 * Math.PI * 2);
-    const r = Math.sin(tick * 0.15 * Math.PI * 2 + Math.PI);
-    return { left: l, right: r, thought: "FEEL MY FISTS!" };
-  }
-
-  if (t.myDistFromCenter > 3.5) {
-    // Near edge: defensive
-    return { left: -0.8, right: -0.8, thought: "Come closer..." };
-  }
-
-  if (t.opponentDistFromCenter > 3.5) {
-    // Opponent near edge: full ram
-    return { left: 1, right: 1, thought: "Goodbye!" };
-  }
-
-  // Mid range: wind up
-  const phase = Math.sin(tick * 0.08 * Math.PI * 2);
-  return {
-    left: phase > 0 ? 1 : -0.5,
-    right: phase > 0 ? 1 : -0.5,
-    thought: "Winding up...",
-  };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
