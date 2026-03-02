@@ -94,19 +94,32 @@ async function apiStep(
   token: string,
   action?: { t: string; dir?: string },
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${server}/api/step`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(action ? { action } : {}),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Step failed (${res.status}): ${text}`);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const res = await fetch(`${server}/api/step`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(action ? { action } : {}),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (res.ok) return res.json();
+      if (res.status >= 500) {
+        console.error(`  [retry] Step got ${res.status}, retrying in ${2 ** attempt}s...`);
+        await Bun.sleep(2 ** attempt * 1000);
+        continue;
+      }
+      const text = await res.text();
+      throw new Error(`Step failed (${res.status}): ${text}`);
+    } catch (err) {
+      if ((err as Error).message?.includes("Step failed")) throw err;
+      console.error(`  [retry] Step error: ${(err as Error).message?.slice(0, 80)}, retrying...`);
+      await Bun.sleep(2 ** attempt * 1000);
+    }
   }
-  return res.json();
+  throw new Error("Step failed after 5 retries");
 }
 
 // ── Action parsing ──────────────────────────────────────────────────
@@ -399,9 +412,19 @@ async function playGame(config: ReturnType<typeof parseArgs>) {
       // Submit action and get next observation
       obs = await apiStep(config.server, token, action);
     } catch (err) {
-      console.error(`${tag} LLM error at tick ${obs.tick}:`, (err as Error).message?.slice(0, 100));
-      // Submit NOOP and continue
-      obs = await apiStep(config.server, token);
+      console.error(`${tag} Error at tick ${obs.tick}:`, (err as Error).message?.slice(0, 100));
+      try {
+        obs = await apiStep(config.server, token);
+      } catch {
+        console.error(`${tag} Step also failed, waiting 5s...`);
+        await Bun.sleep(5000);
+        try {
+          obs = await apiStep(config.server, token);
+        } catch {
+          console.error(`${tag} Server unreachable, giving up.`);
+          break;
+        }
+      }
     }
   }
 }
