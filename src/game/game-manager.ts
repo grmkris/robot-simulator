@@ -824,6 +824,8 @@ export class GameManager {
     const msg = this.getViewerState();
     if (msg) {
       this.frameBuffer.push(msg);
+      // Cap frame buffer to prevent unbounded memory growth
+      if (this.frameBuffer.length > 200) this.frameBuffer.splice(0, this.frameBuffer.length - 200);
       this.broadcastToSpectators(msg);
     }
   }

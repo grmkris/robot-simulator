@@ -429,8 +429,9 @@ export function tickReducer(
   const phase: GameState["phase"] =
     alivePlayers <= 1 && players.size > 1 ? "finished" : state.phase;
 
-  // Accumulate events with existing events
+  // Accumulate events, keeping only the last 50 to prevent unbounded growth
   const allEvents = [...state.events, ...events];
+  if (allEvents.length > 50) allEvents.splice(0, allEvents.length - 50);
 
   return {
     tick,
