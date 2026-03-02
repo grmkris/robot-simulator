@@ -21,11 +21,11 @@ export const MAX_APPLY_OFFSET = 30; // latest applyTick relative to current
 export const INITIAL_HP = 100;
 export const INITIAL_SHIELD = 0;
 export const INITIAL_STAMINA = 100;
-export const INITIAL_AMMO = 12;
+export const INITIAL_AMMO = 20;
 export const MAX_HP = 100;
 export const MAX_SHIELD = 50;
 export const MAX_STAMINA = 100;
-export const MAX_AMMO = 12;
+export const MAX_AMMO = 20;
 
 // ── Cooldowns (in ticks) ──
 export const SHOOT_COOLDOWN = 2;
@@ -48,9 +48,10 @@ export const VISION_SIZE = VISION_RADIUS * 2 + 1; // 17x17 visible window
 // ── Pickups ──
 export const PICKUP_MEDKIT_HP = 25;
 export const PICKUP_SHIELD_AMOUNT = 15;
-export const PICKUP_AMMO_AMOUNT = 6;
+export const PICKUP_AMMO_AMOUNT = 8;
 export const PICKUP_STAMINA_AMOUNT = 30;
-export const PICKUP_RESPAWN_INTERVAL = 100; // ticks (~10s)
+export const PICKUP_RESPAWN_INTERVAL = 30; // ticks (~3s)
+export const INITIAL_PICKUP_COUNT = 8; // pickups spawned at game start
 
 // ── Zone (Battle Royale) ──
 export const ZONE_SHRINK_INTERVAL = 50; // ticks between shrinks (5 seconds)

@@ -8,6 +8,7 @@ import {
   PICKUP_AMMO_AMOUNT,
   PICKUP_STAMINA_AMOUNT,
   PICKUP_RESPAWN_INTERVAL,
+  INITIAL_PICKUP_COUNT,
   MAX_HP,
   MAX_SHIELD,
   MAX_AMMO,
@@ -28,14 +29,33 @@ import type { SeededRNG } from "./rng.js";
 
 const PICKUP_KINDS = [PickupKind.MEDKIT, PickupKind.SHIELD, PickupKind.AMMO, PickupKind.STAMINA];
 
-/** Try to spawn pickups on the map (called every tick, spawns probabilistically) */
+/** Spawn the initial batch of pickups at game start */
+export function spawnInitialPickups(
+  state: GameState,
+  rng: SeededRNG,
+): { pickups: Pickup[]; nextId: number } {
+  const newPickups: Pickup[] = [];
+  let nextId = state.nextPickupId;
+
+  for (let i = 0; i < INITIAL_PICKUP_COUNT; i++) {
+    const pos = findEmptyTile(state, rng);
+    if (!pos) continue;
+
+    const kind = rng.pick(PICKUP_KINDS);
+    newPickups.push({ id: nextId++, kind, x: pos.x, y: pos.y });
+  }
+
+  return { pickups: newPickups, nextId };
+}
+
+/** Try to spawn pickups on the map (called every tick, spawns on interval) */
 export function trySpawnPickups(
   state: GameState,
   rng: SeededRNG,
   tick: number,
 ): { pickups: Pickup[]; nextId: number } {
-  // Only spawn on respawn interval ticks
-  if (tick % PICKUP_RESPAWN_INTERVAL !== 0 || tick === 0) {
+  // Spawn on respawn interval ticks (skip tick 0 — initial pickups handled separately)
+  if (tick === 0 || tick % PICKUP_RESPAWN_INTERVAL !== 0) {
     return { pickups: [], nextId: state.nextPickupId };
   }
 
@@ -45,17 +65,11 @@ export function trySpawnPickups(
   // Spawn 2-4 pickups per interval
   const count = rng.nextIntRange(2, 4);
   for (let i = 0; i < count; i++) {
-    // Find a random empty tile not occupied by a player or existing pickup
     const pos = findEmptyTile(state, rng);
     if (!pos) continue;
 
     const kind = rng.pick(PICKUP_KINDS);
-    newPickups.push({
-      id: nextId++,
-      kind,
-      x: pos.x,
-      y: pos.y,
-    });
+    newPickups.push({ id: nextId++, kind, x: pos.x, y: pos.y });
   }
 
   return { pickups: newPickups, nextId };

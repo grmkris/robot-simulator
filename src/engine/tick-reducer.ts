@@ -32,7 +32,7 @@ import {
 } from "../shared/types.js";
 import { isPassable, isInBounds } from "./grid-map.js";
 import { spawnProjectile, tickProjectiles } from "./projectiles.js";
-import { applyPickup, trySpawnPickups } from "./pickups.js";
+import { applyPickup, trySpawnPickups, spawnInitialPickups } from "./pickups.js";
 import { tickZone, applyZoneDamage } from "./zone.js";
 import { createInitialZone } from "./zone.js";
 import { createMap } from "./grid-map.js";
@@ -72,7 +72,7 @@ export function createGameState(
     });
   }
 
-  return {
+  const initialState: GameState = {
     tick: 0,
     seed,
     map,
@@ -85,6 +85,13 @@ export function createGameState(
     nextProjectileId: 1,
     nextPickupId: 1,
   };
+
+  // Spawn initial pickups on the map
+  const initialPickups = spawnInitialPickups(initialState, rng);
+  initialState.pickups = initialPickups.pickups;
+  initialState.nextPickupId = initialPickups.nextId;
+
+  return initialState;
 }
 
 // ── Tick Reducer ──

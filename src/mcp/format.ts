@@ -58,7 +58,7 @@ export function formatObservation(obs: any, playerName: string | null, playerId:
     "",
     `### You (${playerName})`,
     `  Position: (${me.x}, ${me.y}) facing ${me.facing}`,
-    `  HP: ${me.hp}/100 | Shield: ${me.shield}/50 | Stamina: ${me.stamina}/100 | Ammo: ${me.ammo}/12`,
+    `  HP: ${me.hp}/100 | Shield: ${me.shield}/50 | Stamina: ${me.stamina}/100 | Ammo: ${me.ammo}/20`,
     `  Cooldowns: shoot=${me.cooldowns.shoot} dash=${me.cooldowns.dash} pickup=${me.cooldowns.pickup}`,
     "",
     `### Zone`,
@@ -83,9 +83,19 @@ export function formatObservation(obs: any, playerName: string | null, playerId:
     lines.push("", `### Visible Pickups (${pickups.length})`);
     for (const p of pickups) {
       const dist = Math.max(Math.abs(p.x - me.x), Math.abs(p.y - me.y));
-      const onTile = p.x === me.x && p.y === me.y ? " ← ON YOUR TILE" : "";
-      lines.push(`  ${p.kind} at (${p.x},${p.y}) dist=${dist}${onTile}`);
+      const onTile = p.x === me.x && p.y === me.y;
+      const dx = p.x - me.x;
+      const dy = p.y - me.y;
+      const dirs: string[] = [];
+      if (dy < 0) dirs.push("N");
+      if (dy > 0) dirs.push("S");
+      if (dx > 0) dirs.push("E");
+      if (dx < 0) dirs.push("W");
+      const dirHint = onTile ? "ON YOUR TILE — use PICKUP!" : dirs.join("")+` dist=${dist}`;
+      lines.push(`  ${p.kind} at (${p.x},${p.y}) ${dirHint}`);
     }
+  } else {
+    lines.push("", "### No pickups visible");
   }
 
   if (projectiles.length > 0) {
