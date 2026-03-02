@@ -7,6 +7,9 @@
 //   bun ai-client.ts --model xai:grok-3-mini
 //   bun ai-client.ts --model groq:llama-3.3-70b-versatile
 //   bun ai-client.ts --model fireworks:accounts/fireworks/models/llama-v3p1-70b-instruct
+//   bun ai-client.ts --model openrouter:meta-llama/llama-4-scout
+//   bun ai-client.ts --model openrouter:deepseek/deepseek-r1
+//   bun ai-client.ts --model openrouter:mistralai/mistral-large
 //   bun ai-client.ts --model ollama:llama3.2 --server http://localhost:9000/mcp
 
 import { generateText, createProviderRegistry } from "ai";
@@ -17,6 +20,7 @@ import { google } from "@ai-sdk/google";
 import { xai } from "@ai-sdk/xai";
 import { groq } from "@ai-sdk/groq";
 import { fireworks } from "@ai-sdk/fireworks";
+import { openrouter } from "@openrouter/ai-sdk-provider";
 import { ollama } from "ollama-ai-provider";
 
 // ── CLI args ────────────────────────────────────────────────────────
@@ -40,10 +44,12 @@ function parseArgs() {
     console.error("  bun ai-client.ts --model xai:grok-3-mini");
     console.error("  bun ai-client.ts --model groq:llama-3.3-70b-versatile");
     console.error("  bun ai-client.ts --model fireworks:accounts/fireworks/models/llama-v3p1-70b-instruct");
+    console.error("  bun ai-client.ts --model openrouter:meta-llama/llama-4-scout");
+    console.error("  bun ai-client.ts --model openrouter:deepseek/deepseek-r1");
     console.error("  bun ai-client.ts --model ollama:llama3.2");
     console.error("\nEnvironment variables:");
     console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY");
-    console.error("  XAI_API_KEY, GROQ_API_KEY, FIREWORKS_API_KEY");
+    console.error("  XAI_API_KEY, GROQ_API_KEY, FIREWORKS_API_KEY, OPENROUTER_API_KEY");
     console.error("  (ollama runs locally, no API key needed)");
     process.exit(1);
   }
@@ -67,6 +73,7 @@ const registry = createProviderRegistry({
   xai,
   groq,
   fireworks,
+  openrouter,
   ollama,
 });
 
