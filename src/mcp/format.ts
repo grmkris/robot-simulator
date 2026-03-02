@@ -6,6 +6,11 @@
 export function formatObservation(obs: any, playerName: string | null, playerId: string | null): string {
   if (!obs) return "No observation available.";
 
+  // Waiting for action (turn-based pause)
+  if (obs.status === "waiting_for_action") {
+    return `⏳ ${obs.message}`;
+  }
+
   // Lobby state
   if (obs.status === "waiting" || obs.status === "countdown") {
     return [

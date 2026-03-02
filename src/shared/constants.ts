@@ -61,7 +61,8 @@ export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 16;
 export const LOBBY_COUNTDOWN_S = 10;
 export const LOBBY_COUNTDOWN_TICKS = LOBBY_COUNTDOWN_S * SIM_TPS;
-export const DECISION_TIMEOUT_MS = 5000; // 5s to submit intent
+export const DECISION_TIMEOUT_MS = 5000; // 5s to submit intent (for br.step waiters)
+export const DECISION_WAIT_TIMEOUT_MS = 30_000; // 30s max wait per turn-based decision
 
 // ── Stamina Regen ──
 export const STAMINA_REGEN_PER_TICK = 2;

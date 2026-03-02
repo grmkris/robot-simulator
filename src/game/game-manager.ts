@@ -6,6 +6,7 @@ import {
   SIM_TICK_MS,
   DECISION_INTERVAL,
   DECISION_TIMEOUT_MS,
+  DECISION_WAIT_TIMEOUT_MS,
   VIEWER_TICK_INTERVAL,
   QUEUE_INACTIVITY_TIMEOUT_MS,
 } from "../shared/constants.js";
@@ -90,6 +91,11 @@ export class GameManager {
   // ── MCP push observers ──
   private mcpObservers = new Map<string, GameEventCallback>();
 
+  // ── Turn-based decision wait ──
+  private submittedIntents = new Set<string>();
+  private decisionTimeout: ReturnType<typeof setTimeout> | null = null;
+  private waitingForDecisions = false;
+
   // ── Spectators (WebSocket) ──
   private spectators = new Set<ServerWebSocket<unknown>>();
 
@@ -155,6 +161,10 @@ export class GameManager {
         const updated = { ...player, alive: false, hp: 0, deathTick: this.state.tick };
         this.state.players.set(session.playerId, updated);
       }
+      // If waiting for decisions, leaving player reduces alive count — check if all remaining submitted
+      if (this.waitingForDecisions) {
+        this.checkAllSubmitted();
+      }
     }
 
     this.sessions.remove(token);
@@ -203,6 +213,13 @@ export class GameManager {
     };
 
     this.pendingIntents.set(session.playerId, intent);
+    this.submittedIntents.add(session.playerId);
+
+    // Check if all alive players have submitted — if so, resume ticking
+    if (this.waitingForDecisions) {
+      this.checkAllSubmitted();
+    }
+
     return { ok: true };
   }
 
@@ -439,6 +456,9 @@ export class GameManager {
     this.lastResult = null;
     this.pendingIntents.clear();
     this.stepWaiters = [];
+    this.submittedIntents.clear();
+    this.waitingForDecisions = false;
+    if (this.decisionTimeout) { clearTimeout(this.decisionTimeout); this.decisionTimeout = null; }
 
     const playerInfos = lobbyPlayers.map((p) => ({
       id: p.playerId,
@@ -462,12 +482,21 @@ export class GameManager {
 
     // Push game_start to MCP observers
     this.pushMcpGameStart();
+
+    // Pause immediately for first turn — give agents time to submit their first action
+    this.pauseForDecisions();
   }
 
   private tick(): void {
     if (!this.state || !this.rng || this.state.phase !== "active") return;
 
     const isDecisionTick = (this.state.tick + 1) % DECISION_INTERVAL === 0;
+
+    // At decision boundary: pause and wait for all players to submit
+    if (isDecisionTick && !this.waitingForDecisions) {
+      this.pauseForDecisions();
+      return;
+    }
 
     // Record intents before tick
     if (isDecisionTick) {
@@ -486,6 +515,8 @@ export class GameManager {
     // Clear intents after processing (only on decision ticks)
     if (isDecisionTick) {
       this.pendingIntents.clear();
+      this.submittedIntents.clear();
+      this.waitingForDecisions = false;
     }
 
     // On decision ticks, notify br.step() waiters, SSE clients, and MCP observers
@@ -494,6 +525,7 @@ export class GameManager {
       this.pushSSEObservations();
       this.pushMcpObservations();
     }
+
 
     // Broadcast to viewer spectators
     if (this.state.tick % VIEWER_TICK_INTERVAL === 0) {
@@ -506,12 +538,102 @@ export class GameManager {
     }
   }
 
-  private handleGameEnd(): void {
-    // Stop tick loop
+  /** Push a "waiting for your action" notification to MCP observers who haven't submitted */
+  private pushMcpWaitingNotification(): void {
+    if (!this.state) return;
+    const aliveIds = this.getAlivePlayerIds();
+    const total = aliveIds.length;
+    const submitted = this.submittedIntents.size;
+    const timeoutS = DECISION_WAIT_TIMEOUT_MS / 1000;
+
+    for (const [playerId, callback] of this.mcpObservers) {
+      if (!this.submittedIntents.has(playerId) && aliveIds.includes(playerId)) {
+        try {
+          callback({
+            type: "observation",
+            data: {
+              status: "waiting_for_action",
+              message: `Waiting for your action (${submitted}/${total} players submitted). You have ${timeoutS}s. Call gridroyale_step now!`,
+            },
+          });
+        } catch { /* observer disconnected */ }
+      }
+    }
+  }
+
+  /** Pause the tick loop at a decision boundary and wait for all alive players */
+  private pauseForDecisions(): void {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
+    this.waitingForDecisions = true;
+
+    const aliveCount = this.getAlivePlayerIds().length;
+    const submitted = this.submittedIntents.size;
+    console.log(`[Game] Decision pause at tick ${this.state!.tick + 1}: waiting for ${aliveCount - submitted}/${aliveCount} players (${DECISION_WAIT_TIMEOUT_MS / 1000}s timeout)`);
+
+    // Notify MCP observers who haven't submitted yet
+    this.pushMcpWaitingNotification();
+
+    // Check if all already submitted (possible if actions came in during sim ticks)
+    if (this.checkAllSubmitted()) return;
+
+    // Set up timeout — advance even if not all players submitted
+    this.decisionTimeout = setTimeout(() => {
+      console.log(`[Game] Decision timeout — advancing with ${this.submittedIntents.size}/${this.getAlivePlayerIds().length} submitted`);
+      this.resumeTicking();
+    }, DECISION_WAIT_TIMEOUT_MS);
+  }
+
+  /** Check if all alive players have submitted, and resume if so */
+  private checkAllSubmitted(): boolean {
+    const aliveIds = this.getAlivePlayerIds();
+    const allSubmitted = aliveIds.every((id) => this.submittedIntents.has(id));
+
+    if (allSubmitted && this.waitingForDecisions) {
+      console.log(`[Game] All ${aliveIds.length} players submitted — resuming`);
+      if (this.decisionTimeout) {
+        clearTimeout(this.decisionTimeout);
+        this.decisionTimeout = null;
+      }
+      this.resumeTicking();
+      return true;
+    }
+    return false;
+  }
+
+  /** Resume the tick loop after a decision pause */
+  private resumeTicking(): void {
+    this.decisionTimeout = null;
+    // Fire the paused decision tick immediately
+    this.tick();
+    // Restart the interval for subsequent ticks
+    if (this.state && this.state.phase === "active" && !this.tickTimer) {
+      this.tickTimer = setInterval(() => this.tick(), SIM_TICK_MS);
+    }
+  }
+
+  /** Get IDs of all alive players in the current game */
+  private getAlivePlayerIds(): string[] {
+    if (!this.state) return [];
+    return Array.from(this.state.players.values())
+      .filter((p) => p.alive)
+      .map((p) => p.id);
+  }
+
+  private handleGameEnd(): void {
+    // Stop tick loop and clear turn-based state
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
+    if (this.decisionTimeout) {
+      clearTimeout(this.decisionTimeout);
+      this.decisionTimeout = null;
+    }
+    this.waitingForDecisions = false;
+    this.submittedIntents.clear();
 
     // Extract result
     this.lastResult = extractGameResult(this.state!);
@@ -806,6 +928,7 @@ export class GameManager {
 
   destroy(): void {
     if (this.tickTimer) clearInterval(this.tickTimer);
+    if (this.decisionTimeout) clearTimeout(this.decisionTimeout);
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.lobby.destroy();
   }
