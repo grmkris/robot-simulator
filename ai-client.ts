@@ -4,13 +4,20 @@
 //   bun ai-client.ts --model anthropic:claude-sonnet-4-20250514
 //   bun ai-client.ts --model openai:gpt-4o --name MyBot
 //   bun ai-client.ts --model google:gemini-2.5-flash --loop
-//   bun ai-client.ts --model openai:gpt-4o --server http://localhost:9000/mcp
+//   bun ai-client.ts --model xai:grok-3-mini
+//   bun ai-client.ts --model groq:llama-3.3-70b-versatile
+//   bun ai-client.ts --model fireworks:accounts/fireworks/models/llama-v3p1-70b-instruct
+//   bun ai-client.ts --model ollama:llama3.2 --server http://localhost:9000/mcp
 
 import { generateText, createProviderRegistry } from "ai";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import { google } from "@ai-sdk/google";
+import { xai } from "@ai-sdk/xai";
+import { groq } from "@ai-sdk/groq";
+import { fireworks } from "@ai-sdk/fireworks";
+import { ollama } from "ollama-ai-provider";
 
 // ── CLI args ────────────────────────────────────────────────────────
 function parseArgs() {
@@ -30,6 +37,14 @@ function parseArgs() {
     console.error("  bun ai-client.ts --model anthropic:claude-sonnet-4-20250514");
     console.error("  bun ai-client.ts --model openai:gpt-4o");
     console.error("  bun ai-client.ts --model google:gemini-2.5-flash");
+    console.error("  bun ai-client.ts --model xai:grok-3-mini");
+    console.error("  bun ai-client.ts --model groq:llama-3.3-70b-versatile");
+    console.error("  bun ai-client.ts --model fireworks:accounts/fireworks/models/llama-v3p1-70b-instruct");
+    console.error("  bun ai-client.ts --model ollama:llama3.2");
+    console.error("\nEnvironment variables:");
+    console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY");
+    console.error("  XAI_API_KEY, GROQ_API_KEY, FIREWORKS_API_KEY");
+    console.error("  (ollama runs locally, no API key needed)");
     process.exit(1);
   }
 
@@ -45,7 +60,15 @@ function parseArgs() {
 }
 
 // ── Provider registry ───────────────────────────────────────────────
-const registry = createProviderRegistry({ anthropic, openai, google });
+const registry = createProviderRegistry({
+  anthropic,
+  openai,
+  google,
+  xai,
+  groq,
+  fireworks,
+  ollama,
+});
 
 // ── System prompt ───────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are an AI agent playing GridRoyale, a battle royale game on a 40x40 grid.
