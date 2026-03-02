@@ -9,10 +9,16 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ai-client": "bun ai-client.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.50",
+    "@ai-sdk/google": "^3.0.34",
+    "@ai-sdk/mcp": "^1.0.22",
+    "@ai-sdk/openai": "^3.0.37",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "ai": "^6.0.105",
     "drizzle-orm": "^0.44.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
