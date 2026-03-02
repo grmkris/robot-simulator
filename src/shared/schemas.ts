@@ -103,6 +103,7 @@ export const VisibleProjectileSchema = z.object({
   x: z.number().int(),
   y: z.number().int(),
   dir: DirectionSchema,
+  own: z.boolean(),
 });
 
 export const VisibleTileSchema = z.object({
@@ -115,6 +116,13 @@ export const GameEventSchema = z.object({
   tick: z.number().int(),
   type: z.enum(["DAMAGE", "KILL", "PICKUP", "ZONE_SHRINK", "SHOT", "DASH"]),
   data: z.record(z.unknown()),
+});
+
+export const ActionResultSchema = z.object({
+  action: ActionSchema,
+  dir: DirectionSchema.optional(),
+  success: z.boolean(),
+  reason: z.string().optional(),
 });
 
 export const ObservationSchema = z.object({
@@ -131,4 +139,5 @@ export const ObservationSchema = z.object({
   }),
   recentEvents: z.array(GameEventSchema),
   playersAlive: z.number().int(),
+  lastAction: ActionResultSchema.optional(),
 });

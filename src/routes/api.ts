@@ -119,19 +119,28 @@ Status: ${gm.gamePhase}
 - Fog of War: You only see within your vision radius
 - Projectiles: ${PROJECTILE_DAMAGE} damage, ${PROJECTILE_TTL}-tick TTL, 1 tile/tick
 - Zone: Shrinks every ${ZONE_SHRINK_INTERVAL} ticks, ${ZONE_DAMAGE_PER_TICK} damage/tick outside
-- Pickups: MEDKIT (+25 HP), SHIELD (+15), AMMO (+6), STAMINA (+30)
+- Pickups: MEDKIT (+25 HP), SHIELD (+15), AMMO (+8), STAMINA (+30)
 
 ## Timing
 - Sim: ${SIM_TPS} ticks/sec
 - Decisions: ${DECISION_TPS}/sec (every ${DECISION_INTERVAL} ticks)
 - br.step() blocks until next decision tick
 
+## Observation Features
+- **Action Feedback**: Each observation includes a \`lastAction\` field showing if your previous action succeeded or failed (and why — wall, cooldown, no ammo, etc.)
+- **Movement Info**: The observation lists which adjacent tiles (N/E/S/W) are open or blocked by walls, so you can plan your path
+- **Projectile Ownership**: Projectiles are labeled as YOUR SHOT or ENEMY so you can track your own fire
+- **Situation Summary**: Distance to nearest enemy, nearest pickup, and incoming projectile warnings
+
 ## Strategy Tips
+- **Check the Movement section** before moving — it tells you exactly which directions are open vs blocked by walls
+- **Check lastAction** to see if your previous action worked — if it failed, adjust your strategy
 - Stay inside the safe zone — zone damage is constant and deadly
-- Collect pickups to sustain HP/ammo
+- Collect pickups to sustain HP/ammo — they're scattered across the map
+- Shoot enemies only when axis-aligned (same row or column) — projectiles travel in straight lines
+- Projectiles move 1 tile per sim tick (5 tiles between your decisions) — lead your shots
 - Use fog of war — enemies can't see you either
 - DASH to escape or close distance quickly
-- Save ammo — projectiles are limited
 `;
 }
 

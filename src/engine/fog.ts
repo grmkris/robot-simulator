@@ -81,6 +81,7 @@ export function buildObservation(
         x: proj.x,
         y: proj.y,
         dir: proj.dir,
+        own: proj.ownerId === playerId,
       });
     }
   }
@@ -96,6 +97,9 @@ export function buildObservation(
 
   // Decision index = how many decision ticks have passed
   const decisionIndex = Math.floor(state.tick / 5);
+
+  // Last action result for this player
+  const lastAction = state.actionResults.get(playerId);
 
   return {
     matchId,
@@ -125,5 +129,6 @@ export function buildObservation(
     },
     recentEvents,
     playersAlive,
+    lastAction,
   };
 }

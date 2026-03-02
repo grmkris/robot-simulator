@@ -42,6 +42,15 @@ export enum PickupKind {
 
 export type GamePhase = "lobby" | "countdown" | "active" | "finished";
 
+// ── Action Result (feedback for last action) ──
+
+export interface ActionResult {
+  action: Action;
+  dir?: Direction;
+  success: boolean;
+  reason?: "ok" | "blocked_by_wall" | "blocked_by_player" | "out_of_bounds" | "on_cooldown" | "no_ammo" | "no_stamina" | "no_pickup" | "no_target";
+}
+
 // ── Direction Helpers ──
 
 export const DIRECTION_DELTAS: Record<Direction, Vec2> = {
@@ -152,6 +161,8 @@ export interface GameState {
   events: GameEvent[];
   nextProjectileId: number;
   nextPickupId: number;
+  /** Per-player action results from last decision tick */
+  actionResults: Map<string, ActionResult>;
 }
 
 // ── Observation (fog-filtered, per-player, per spec section 11) ──
@@ -191,10 +202,13 @@ export interface Observation {
       x: number;
       y: number;
       dir: Direction;
+      own: boolean;
     }>;
   };
   recentEvents: GameEvent[];
   playersAlive: number;
+  /** Feedback from your last submitted action */
+  lastAction?: ActionResult;
 }
 
 // ── Match Result ──

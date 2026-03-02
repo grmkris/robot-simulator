@@ -23,6 +23,7 @@ import {
 import {
   Action,
   DIRECTION_DELTAS,
+  type ActionResult,
   type GameEvent,
   type GameResult,
   type GameState,
@@ -84,6 +85,7 @@ export function createGameState(
     events: [],
     nextProjectileId: 1,
     nextPickupId: 1,
+    actionResults: new Map(),
   };
 
   // Spawn initial pickups on the map
@@ -135,15 +137,26 @@ export function tickReducer(
 
   // Only process intents on decision ticks
   const isDecisionTick = tick % DECISION_INTERVAL === 0;
+  const actionResults = new Map<string, ActionResult>();
 
   if (isDecisionTick) {
-    // ── 1. Validate intents ──
+    // ── 1. Validate intents (record rejection reasons) ──
     const validIntents = new Map<string, Intent>();
     for (const [playerId, intent] of intents) {
       const player = players.get(playerId);
       if (!player || !player.alive) continue;
-      const validated = validateIntent(intent, player, state);
+      const { validated, rejectionReason } = validateIntentWithReason(intent, player, state);
       validIntents.set(playerId, validated);
+
+      // If intent was rejected (downgraded to NOOP), record the reason
+      if (rejectionReason) {
+        actionResults.set(playerId, {
+          action: intent.action,
+          dir: intent.dir,
+          success: false,
+          reason: rejectionReason,
+        });
+      }
     }
 
     // Players who didn't submit get NOOP
@@ -155,6 +168,8 @@ export function tickReducer(
 
     // ── 2. Resolve MOVE and DASH ──
     const moveTargets = new Map<string, { x: number; y: number }>();
+    // Track which MOVEs were blocked by walls/bounds (before collision resolution)
+    const moveBlockedByWall = new Set<string>();
 
     for (const [id, intent] of validIntents) {
       const player = players.get(id)!;
@@ -164,7 +179,13 @@ export function tickReducer(
         const nx = player.x + delta.x;
         const ny = player.y + delta.y;
 
-        if (isInBounds(nx, ny) && isPassable(state.map, nx, ny)) {
+        if (!isInBounds(nx, ny)) {
+          moveBlockedByWall.add(id);
+          actionResults.set(id, { action: Action.MOVE, dir: intent.dir, success: false, reason: "out_of_bounds" });
+        } else if (!isPassable(state.map, nx, ny)) {
+          moveBlockedByWall.add(id);
+          actionResults.set(id, { action: Action.MOVE, dir: intent.dir, success: false, reason: "blocked_by_wall" });
+        } else {
           moveTargets.set(id, { x: nx, y: ny });
         }
         // Update facing regardless
@@ -186,6 +207,9 @@ export function tickReducer(
 
         if (fx !== player.x || fy !== player.y) {
           moveTargets.set(id, { x: fx, y: fy });
+        } else {
+          // Dash didn't move at all — blocked
+          actionResults.set(id, { action: Action.DASH, dir: intent.dir, success: false, reason: "blocked_by_wall" });
         }
 
         // Consume stamina and set cooldown
@@ -236,6 +260,26 @@ export function tickReducer(
       if (occupants && occupants.length === 1 && occupants[0] === id) {
         const p = players.get(id)!;
         players.set(id, { ...p, x: target.x, y: target.y });
+        // Record success if not already recorded (DASH sets its own)
+        if (!actionResults.has(id)) {
+          const intent = validIntents.get(id)!;
+          actionResults.set(id, { action: intent.action, dir: intent.dir, success: true, reason: "ok" });
+        }
+      } else if (!moveBlockedByWall.has(id) && !actionResults.has(id)) {
+        // Collision with another player
+        const intent = validIntents.get(id)!;
+        actionResults.set(id, { action: intent.action, dir: intent.dir, success: false, reason: "blocked_by_player" });
+      }
+    }
+
+    // Record success for DASH moves that weren't blocked
+    for (const [id, intent] of validIntents) {
+      if (intent.action === Action.DASH && moveTargets.has(id) && !actionResults.has(id)) {
+        const key = `${moveTargets.get(id)!.x},${moveTargets.get(id)!.y}`;
+        const occupants = targetOccupancy.get(key);
+        if (occupants && occupants.length === 1 && occupants[0] === id) {
+          actionResults.set(id, { action: Action.DASH, dir: intent.dir, success: true, reason: "ok" });
+        }
       }
     }
 
@@ -266,6 +310,9 @@ export function tickReducer(
         type: "SHOT",
         data: { playerId: id, dir: intent.dir },
       });
+
+      // Record shoot success
+      actionResults.set(id, { action: Action.SHOOT, dir: intent.dir, success: true, reason: "ok" });
     }
 
     // ── 5. Process PICKUP ──
@@ -289,6 +336,16 @@ export function tickReducer(
 
       // Remove the pickup
       pickups = pickups.filter((_, i) => i !== pickupIdx);
+
+      // Record pickup success
+      actionResults.set(id, { action: Action.PICKUP, success: true, reason: "ok" });
+    }
+
+    // Record NOOP for players who submitted NOOP (or didn't submit at all)
+    for (const [id, intent] of validIntents) {
+      if (!actionResults.has(id) && intent.action === Action.NOOP) {
+        actionResults.set(id, { action: Action.NOOP, success: true, reason: "ok" });
+      }
     }
   }
 
@@ -387,48 +444,48 @@ export function tickReducer(
     events: allEvents,
     nextProjectileId,
     nextPickupId,
+    actionResults: isDecisionTick ? actionResults : state.actionResults,
   };
 }
 
 // ── Intent Validation ──
 
-/** Validate an intent — return NOOP if invalid */
-function validateIntent(
+/** Validate an intent — return NOOP if invalid, with rejection reason */
+function validateIntentWithReason(
   intent: Intent,
   player: PlayerState,
   state: GameState,
-): Intent {
+): { validated: Intent; rejectionReason?: ActionResult["reason"] } {
   switch (intent.action) {
     case Action.MOVE:
-      if (!intent.dir) return { action: Action.NOOP };
-      return intent;
+      if (!intent.dir) return { validated: { action: Action.NOOP } };
+      return { validated: intent };
 
     case Action.DASH:
-      if (!intent.dir) return { action: Action.NOOP };
-      if (player.stamina < DASH_STAMINA_COST) return { action: Action.NOOP };
-      if (player.cooldowns.dash > 0) return { action: Action.NOOP };
-      return intent;
+      if (!intent.dir) return { validated: { action: Action.NOOP } };
+      if (player.cooldowns.dash > 0) return { validated: { action: Action.NOOP }, rejectionReason: "on_cooldown" };
+      if (player.stamina < DASH_STAMINA_COST) return { validated: { action: Action.NOOP }, rejectionReason: "no_stamina" };
+      return { validated: intent };
 
     case Action.SHOOT:
-      if (!intent.dir) return { action: Action.NOOP };
-      if (player.ammo <= 0) return { action: Action.NOOP };
-      if (player.cooldowns.shoot > 0) return { action: Action.NOOP };
-      return intent;
+      if (!intent.dir) return { validated: { action: Action.NOOP } };
+      if (player.cooldowns.shoot > 0) return { validated: { action: Action.NOOP }, rejectionReason: "on_cooldown" };
+      if (player.ammo <= 0) return { validated: { action: Action.NOOP }, rejectionReason: "no_ammo" };
+      return { validated: intent };
 
     case Action.PICKUP:
-      if (player.cooldowns.pickup > 0) return { action: Action.NOOP };
-      // Check if there's a pickup on the player's tile
+      if (player.cooldowns.pickup > 0) return { validated: { action: Action.NOOP }, rejectionReason: "on_cooldown" };
       const hasPickup = state.pickups.some(
         (p) => p.x === player.x && p.y === player.y,
       );
-      if (!hasPickup) return { action: Action.NOOP };
-      return intent;
+      if (!hasPickup) return { validated: { action: Action.NOOP }, rejectionReason: "no_pickup" };
+      return { validated: intent };
 
     case Action.NOOP:
-      return intent;
+      return { validated: intent };
 
     default:
-      return { action: Action.NOOP };
+      return { validated: { action: Action.NOOP } };
   }
 }
 
