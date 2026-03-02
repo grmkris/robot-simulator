@@ -100,6 +100,9 @@ export class GameManager {
   // ── Spectators (WebSocket) ──
   private spectators = new Set<ServerWebSocket<unknown>>();
 
+  // ── Frame buffer for catch-up replay ──
+  private frameBuffer: ViewerStateMessage[] = [];
+
   // ── Cleanup timer ──
   private cleanupTimer: ReturnType<typeof setInterval>;
 
@@ -186,8 +189,8 @@ export class GameManager {
       return buildObservation(this.state, session.playerId, this.matchId);
     }
 
-    // Game finished (check before lobby — matchId gets cleared on game end)
-    if (this.lastResult) {
+    // Game finished — only return to players who were in that game
+    if (this.lastResult && this.lastResult.placements.some(p => p.playerId === session.playerId)) {
       return { status: "finished", result: this.lastResult };
     }
 
@@ -236,8 +239,9 @@ export class GameManager {
     const session = this.sessions.getByToken(token);
     if (!session) return null;
 
-    // If game is finished (check before lobby — matchId gets cleared on game end)
-    if (this.lastResult && (!this.state || this.state.phase === "finished")) {
+    // If game is finished — only return to players who were in that game
+    if (this.lastResult && (!this.state || this.state.phase === "finished") &&
+        this.lastResult.placements.some(p => p.playerId === session.playerId)) {
       return {
         status: "finished",
         result: this.lastResult,
@@ -341,6 +345,16 @@ export class GameManager {
           };
         }),
       playersAlive: Array.from(this.state.players.values()).filter((p) => p.alive).length,
+      lastActions: this.state.actionResults.size > 0
+        ? Array.from(this.state.actionResults.entries()).map(([playerId, ar]) => ({
+            playerId,
+            playerName: this.state!.players.get(playerId)?.name ?? "unknown",
+            action: ar.action,
+            dir: ar.dir,
+            success: ar.success,
+            reason: ar.reason,
+          }))
+        : undefined,
     };
   }
 
@@ -395,8 +409,12 @@ export class GameManager {
   addSpectator(ws: ServerWebSocket<unknown>): void {
     this.spectators.add(ws);
 
-    // Send current state immediately
-    if (this.state) {
+    if (this.state && this.frameBuffer.length > 0) {
+      // Send catch-up with decision-tick frames (every DECISION_INTERVAL-th frame)
+      const catchUpFrames = this.frameBuffer.filter((_, i) => i % DECISION_INTERVAL === 0);
+      ws.send(JSON.stringify({ type: "catch_up", frames: catchUpFrames }));
+    } else if (this.state) {
+      // No buffer yet (just started), send current state
       const msg = this.getViewerState();
       if (msg) {
         ws.send(JSON.stringify(msg));
@@ -454,6 +472,7 @@ export class GameManager {
     this.rng = new SeededRNG(this.gameSeed);
     this.matchId = generateMatchId();
     this.intentLog = [];
+    this.frameBuffer = [];
     this.lastResult = null;
     this.pendingIntents.clear();
     this.stepWaiters = [];
@@ -707,6 +726,7 @@ export class GameManager {
       this.state = null;
       this.rng = null;
       this.matchId = null;
+      this.lastResult = null;
       this.lobby.reset();
       this.broadcastLobbyState();
       console.log("[Game] Ready for next game");
@@ -803,6 +823,7 @@ export class GameManager {
   private broadcastViewerState(): void {
     const msg = this.getViewerState();
     if (msg) {
+      this.frameBuffer.push(msg);
       this.broadcastToSpectators(msg);
     }
   }
