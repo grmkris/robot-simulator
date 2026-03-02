@@ -33,8 +33,8 @@ export function tickZone(
 ): { zone: ZoneState; events: GameEvent[] } {
   const events: GameEvent[] = [];
 
-  if (tick >= zone.nextShrinkTick && zone.r > 3) {
-    const newR = Math.max(3, zone.r - 2);
+  if (tick >= zone.nextShrinkTick && zone.r > 0) {
+    const newR = Math.max(0, zone.r - 2);
     const newZone: ZoneState = {
       cx: zone.cx,
       cy: zone.cy,
