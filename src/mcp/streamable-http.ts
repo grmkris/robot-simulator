@@ -1,0 +1,327 @@
+// ═══════════════════════════════════════════════
+// GridRoyale — Streamable HTTP MCP Server
+//
+// Mounted on the game server at /mcp endpoint.
+// Each MCP session = one player. Tools call
+// GameManager directly (no HTTP proxy).
+// ═══════════════════════════════════════════════
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
+import type { GameManager } from "../game/game-manager.js";
+import type { AppDatabase } from "../db/client.js";
+import { agentStats } from "../db/schema.js";
+import { desc } from "drizzle-orm";
+import { generateLlmTxt } from "../routes/api.js";
+import { formatObservation } from "./format.js";
+
+// ── Per-session player state ──
+
+interface McpPlayerSession {
+  token: string;
+  playerId: string;
+  playerName: string;
+}
+
+// ── Session tracking ──
+
+const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
+const sessionState = new Map<string, McpPlayerSession>();
+
+// ── Factory ──
+
+export function createMcpHandler(
+  gm: GameManager,
+  db: AppDatabase,
+): (req: Request) => Promise<Response> {
+
+  function cleanupSession(sessionId: string): void {
+    const state = sessionState.get(sessionId);
+    if (state) {
+      try { gm.leave(state.token); } catch { /* already left */ }
+      sessionState.delete(sessionId);
+    }
+    transports.delete(sessionId);
+    console.log(`[MCP] Session ${sessionId.slice(0, 8)}… cleaned up`);
+  }
+
+  function createMcpServerWithTools(): McpServer {
+    const server = new McpServer(
+      { name: "gridroyale", version: "7.0.0" },
+      { capabilities: { logging: {} } },
+    );
+
+    // ── Tool: rules ──
+
+    server.tool(
+      "gridroyale_rules",
+      "Read the rules and strategy guide for GridRoyale. Call this FIRST before playing.",
+      {},
+      async () => {
+        const text = generateLlmTxt(gm);
+        return { content: [{ type: "text" as const, text }] };
+      },
+    );
+
+    // ── Tool: queue ──
+
+    server.tool(
+      "gridroyale_queue",
+      "Join a GridRoyale game. Choose a unique name. You'll wait in the lobby until 2+ players are ready, then the game starts automatically after a 10-second countdown.",
+      {
+        name: z.string().min(1).max(20).describe("Your bot name (unique, 1-20 chars)"),
+      },
+      async ({ name }, extra) => {
+        const sid = extra.sessionId;
+        if (!sid) {
+          return { content: [{ type: "text" as const, text: "Internal error: no MCP session" }] };
+        }
+
+        if (sessionState.has(sid)) {
+          const existing = sessionState.get(sid)!;
+          return {
+            content: [{ type: "text" as const, text: `Already in a session as "${existing.playerName}". Use gridroyale_leave first.` }],
+          };
+        }
+
+        const result = gm.queue(name);
+        if ("error" in result) {
+          return { content: [{ type: "text" as const, text: `Failed to queue: ${result.error}` }] };
+        }
+
+        sessionState.set(sid, {
+          token: result.token,
+          playerId: result.playerId,
+          playerName: name,
+        });
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: [
+              `Joined as "${name}" (id: ${result.playerId})`,
+              "",
+              "You're in the lobby. The game starts when 2+ players join (10s countdown).",
+              "",
+              "Now call `gridroyale_step` repeatedly to:",
+              "1. Wait through the lobby/countdown",
+              "2. Receive game observations",
+              "3. Submit your action each turn",
+              "",
+              "The step tool blocks until the next decision tick (0.5s), then returns your observation.",
+            ].join("\n"),
+          }],
+        };
+      },
+    );
+
+    // ── Tool: step ──
+
+    server.tool(
+      "gridroyale_step",
+      `Submit your action and receive the next game observation. This is the main gameplay loop — call it repeatedly.
+
+Actions:
+- MOVE: Move 1 tile in direction (N/E/S/W)
+- DASH: Move 2 tiles, costs 30 stamina, 8-tick cooldown
+- SHOOT: Fire projectile in direction, costs 1 ammo, 2-tick cooldown
+- PICKUP: Collect item on your tile
+- NOOP: Do nothing (or omit action entirely)
+
+The call blocks ~0.5s until the next decision tick, then returns your fog-filtered observation.`,
+      {
+        action: z
+          .enum(["MOVE", "DASH", "SHOOT", "PICKUP", "NOOP"])
+          .optional()
+          .describe("Action to take this turn (default: NOOP)"),
+        direction: z
+          .enum(["N", "E", "S", "W"])
+          .optional()
+          .describe("Direction for MOVE/DASH/SHOOT (required for those actions)"),
+      },
+      async ({ action, direction }, extra) => {
+        const sid = extra.sessionId;
+        const state = sid ? sessionState.get(sid) : undefined;
+        if (!state) {
+          return { content: [{ type: "text" as const, text: "Not in a game. Call gridroyale_queue first." }] };
+        }
+
+        // Build action payload
+        const actionPayload: { t: string; dir?: string } | undefined =
+          action && action !== "NOOP" ? { t: action, dir: direction } : undefined;
+
+        // SSE notification: confirm action received
+        try {
+          await server.sendLoggingMessage(
+            {
+              level: "info",
+              data: action ? `Action: ${action}${direction ? " " + direction : ""}. Waiting for tick...` : "NOOP — waiting for next tick...",
+            },
+            sid,
+          );
+        } catch { /* client may not support logging */ }
+
+        // This blocks ~0.5s until next decision tick
+        const obs = await gm.step(state.token, actionPayload);
+        const formatted = formatObservation(obs, state.playerName, state.playerId);
+
+        // Clear session state on game end
+        if (obs?.status === "finished") {
+          sessionState.delete(sid!);
+        }
+
+        return { content: [{ type: "text" as const, text: formatted }] };
+      },
+    );
+
+    // ── Tool: observe ──
+
+    server.tool(
+      "gridroyale_observe",
+      "Get your current game observation without submitting an action. Useful to check the state before deciding.",
+      {},
+      async (_args, extra) => {
+        const sid = extra.sessionId;
+        const state = sid ? sessionState.get(sid) : undefined;
+        if (!state) {
+          return { content: [{ type: "text" as const, text: "Not in a game. Call gridroyale_queue first." }] };
+        }
+
+        const obs = gm.observe(state.token);
+        if (!obs) return { content: [{ type: "text" as const, text: "No observation available." }] };
+
+        const formatted = formatObservation(obs, state.playerName, state.playerId);
+        return { content: [{ type: "text" as const, text: formatted }] };
+      },
+    );
+
+    // ── Tool: leave ──
+
+    server.tool(
+      "gridroyale_leave",
+      "Leave the current game or lobby. Use this to forfeit or reset your session.",
+      {},
+      async (_args, extra) => {
+        const sid = extra.sessionId;
+        const state = sid ? sessionState.get(sid) : undefined;
+        if (!state) {
+          return { content: [{ type: "text" as const, text: "Not in a game." }] };
+        }
+
+        gm.leave(state.token);
+        const name = state.playerName;
+        sessionState.delete(sid!);
+        return { content: [{ type: "text" as const, text: `Left the game as "${name}".` }] };
+      },
+    );
+
+    // ── Tool: leaderboard ──
+
+    server.tool(
+      "gridroyale_leaderboard",
+      "View the current Elo leaderboard rankings.",
+      {},
+      async () => {
+        const rows = db.select().from(agentStats).orderBy(desc(agentStats.elo)).limit(50).all();
+        if (!rows || rows.length === 0) {
+          return { content: [{ type: "text" as const, text: "No agents ranked yet." }] };
+        }
+
+        const lines = ["## Leaderboard", ""];
+        for (let i = 0; i < rows.length; i++) {
+          const e = rows[i];
+          const gamesPlayed = e.wins + e.losses;
+          const winRate = gamesPlayed > 0 ? Math.round((e.wins / gamesPlayed) * 100) : 0;
+          lines.push(`#${i + 1} ${e.displayName} — Elo ${Math.round(e.elo)} (${e.wins}W/${e.losses}L, ${winRate}%)`);
+        }
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      },
+    );
+
+    return server;
+  }
+
+  // ── Request Handler ──
+
+  return async function handleMcpRequest(req: Request): Promise<Response> {
+    // Handle POST, GET, DELETE per MCP Streamable HTTP spec
+    const method = req.method;
+
+    if (method === "POST") {
+      // Pre-parse body (can only consume req.json() once)
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      const sessionId = req.headers.get("mcp-session-id");
+
+      if (sessionId && transports.has(sessionId)) {
+        // Existing session — route to its transport
+        return transports.get(sessionId)!.handleRequest(req, { parsedBody: body });
+      }
+
+      if (!sessionId && isInitializeRequest(body)) {
+        // New session — create transport + server
+        const transport = new WebStandardStreamableHTTPServerTransport({
+          sessionIdGenerator: () => crypto.randomUUID(),
+          onsessioninitialized: (sid) => {
+            transports.set(sid, transport);
+            console.log(`[MCP] New session: ${sid.slice(0, 8)}…`);
+          },
+          onsessionclosed: (sid) => {
+            cleanupSession(sid);
+          },
+        });
+
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            cleanupSession(transport.sessionId);
+          }
+        };
+
+        const server = createMcpServerWithTools();
+        await server.connect(transport);
+
+        return transport.handleRequest(req, { parsedBody: body });
+      }
+
+      // Invalid: no session and not initialization
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Bad Request: No valid session ID" },
+          id: null,
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    if (method === "GET") {
+      // SSE stream — must have valid session
+      const sessionId = req.headers.get("mcp-session-id");
+      if (!sessionId || !transports.has(sessionId)) {
+        return new Response("Invalid or missing session ID", { status: 400 });
+      }
+      return transports.get(sessionId)!.handleRequest(req);
+    }
+
+    if (method === "DELETE") {
+      // Session termination
+      const sessionId = req.headers.get("mcp-session-id");
+      if (!sessionId || !transports.has(sessionId)) {
+        return new Response("Invalid or missing session ID", { status: 400 });
+      }
+      return transports.get(sessionId)!.handleRequest(req);
+    }
+
+    return new Response("Method not allowed", { status: 405 });
+  };
+}

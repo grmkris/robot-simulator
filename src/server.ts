@@ -14,6 +14,7 @@ import { env } from "./env.js";
 import { createDb } from "./db/client.js";
 import { GameManager } from "./game/game-manager.js";
 import { createApiRoutes } from "./routes/api.js";
+import { createMcpHandler } from "./mcp/streamable-http.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -105,12 +106,23 @@ const gameManager = new GameManager(db);
 
 const apiRoutes = createApiRoutes(gameManager, db);
 
+// ── MCP Handler ──
+
+const mcpHandler = createMcpHandler(gameManager, db);
+
 // ── CORS headers ──
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+const mcpCorsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id, mcp-protocol-version, Last-Event-ID",
+  "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
 };
 
 // ── Server ──
@@ -132,9 +144,26 @@ const server = Bun.serve({
   fetch(req, server) {
     const url = new URL(req.url);
 
-    // Global CORS preflight
+    // CORS preflight (MCP needs extra headers)
     if (req.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders });
+      const headers = url.pathname === "/mcp" ? mcpCorsHeaders : corsHeaders;
+      return new Response(null, { status: 204, headers });
+    }
+
+    // MCP Streamable HTTP endpoint
+    if (url.pathname === "/mcp") {
+      return mcpHandler(req).then((response) => {
+        // Inject CORS headers into the MCP response
+        const newHeaders = new Headers(response.headers);
+        for (const [k, v] of Object.entries(mcpCorsHeaders)) {
+          if (!newHeaders.has(k)) newHeaders.set(k, v);
+        }
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: newHeaders,
+        });
+      });
     }
 
     // WebSocket upgrade — spectator stream
@@ -182,5 +211,7 @@ console.log(`[Server] ── Data ──`);
 console.log(`[Server]   GET  ${server.url}api/lobby`);
 console.log(`[Server]   GET  ${server.url}health`);
 console.log(`[Server]   GET  ${server.url}llm.txt`);
+console.log(`[Server] ── MCP ──`);
+console.log(`[Server]   MCP  ${server.url}mcp  (Streamable HTTP)`);
 
 export { server };

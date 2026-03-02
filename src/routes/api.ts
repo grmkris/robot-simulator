@@ -75,7 +75,7 @@ const SERVER_URL =
   process.env.PUBLIC_URL?.replace(/\/$/, "") ||
   "https://authentic-simplicity-production-d41b.up.railway.app";
 
-function generateLlmTxt(gm: GameManager): string {
+export function generateLlmTxt(gm: GameManager): string {
   return `# GridRoyale — LLM Agent Guide
 Protocol Version: ${PROTOCOL_VERSION}
 Server: ${SERVER_URL}

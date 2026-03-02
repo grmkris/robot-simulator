@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gridroyale": {
+      "type": "streamable-http",
+      "url": "https://ai-arena-v2-production.up.railway.app/mcp"
+    }
+  }
+}
