@@ -410,8 +410,10 @@ export class GameManager {
     this.spectators.add(ws);
 
     if (this.state && this.frameBuffer.length > 0) {
-      // Send catch-up with decision-tick frames (every DECISION_INTERVAL-th frame)
-      const catchUpFrames = this.frameBuffer.filter((_, i) => i % DECISION_INTERVAL === 0);
+      // Send catch-up with last 20 decision-tick frames to limit message size
+      const catchUpFrames = this.frameBuffer
+        .filter((_, i) => i % DECISION_INTERVAL === 0)
+        .slice(-20);
       ws.send(JSON.stringify({ type: "catch_up", frames: catchUpFrames }));
     } else if (this.state) {
       // No buffer yet (just started), send current state
@@ -721,16 +723,15 @@ export class GameManager {
       }
     }
 
-    // Reset for next game after delay
-    setTimeout(() => {
-      this.state = null;
-      this.rng = null;
-      this.matchId = null;
-      this.lastResult = null;
-      this.lobby.reset();
-      this.broadcastLobbyState();
-      console.log("[Game] Ready for next game");
-    }, 5000);
+    // Reset for next game immediately (keep lastResult for final observe calls)
+    this.state = null;
+    this.rng = null;
+    this.matchId = null;
+    this.frameBuffer = [];
+    this.intentLog = [];
+    this.lobby.reset();
+    this.broadcastLobbyState();
+    console.log("[Game] Ready for next game");
   }
 
   // ══════════════════════════════════════════
@@ -825,7 +826,7 @@ export class GameManager {
     if (msg) {
       this.frameBuffer.push(msg);
       // Cap frame buffer to prevent unbounded memory growth
-      if (this.frameBuffer.length > 200) this.frameBuffer.splice(0, this.frameBuffer.length - 200);
+      if (this.frameBuffer.length > 50) this.frameBuffer.splice(0, this.frameBuffer.length - 50);
       this.broadcastToSpectators(msg);
     }
   }
@@ -873,101 +874,108 @@ export class GameManager {
   private persistGameResult(): void {
     if (!this.lastResult || !this.matchId || !this.state) return;
 
+    const result = this.lastResult;
+    const matchId = this.matchId;
+    const state = this.state;
+    const intentLog = this.intentLog;
+
+    // Run ALL database operations in a single transaction to avoid
+    // blocking the event loop with many individual .run() calls
     try {
-      const now = Date.now();
-      const durationS = (now - this.gameStartTime) / 1000;
-      const winnerPlayer = this.lastResult.placements.find(p => p.placement === 1);
+      this.db.transaction((tx) => {
+        const now = Date.now();
+        const durationS = (now - this.gameStartTime) / 1000;
+        const winnerPlayer = result.placements.find(p => p.placement === 1);
 
-      // 1. Insert game record
-      this.db.insert(games).values({
-        id: this.matchId,
-        seed: this.gameSeed,
-        playerCount: this.lastResult.placements.length,
-        winnerId: this.lastResult.winnerId,
-        winnerName: winnerPlayer?.name ?? null,
-        reason: this.lastResult.reason,
-        totalTicks: this.lastResult.totalTicks,
-        durationS,
-        timestamp: new Date(now),
-      }).run();
-
-      // 2. Get current Elo for all players
-      const playerElos: Array<{ name: string; elo: number; placement: number }> = [];
-      for (const placement of this.lastResult.placements) {
-        const existing = this.db.select().from(agentStats)
-          .where(eq(agentStats.agentName, placement.name.toLowerCase()))
-          .get();
-        playerElos.push({
-          name: placement.name.toLowerCase(),
-          elo: existing?.elo ?? 1000,
-          placement: placement.placement,
-        });
-      }
-
-      // 3. Compute Elo changes
-      const eloChanges = computeMultiplayerElo(playerElos);
-
-      // 4. Insert game_players and update agent_stats
-      for (const placement of this.lastResult.placements) {
-        const nameLower = placement.name.toLowerCase();
-        const eloChange = eloChanges.get(nameLower) ?? 0;
-        const player = this.state.players.get(placement.playerId);
-        const survivalTicks = player?.deathTick ?? this.state.tick;
-
-        this.db.insert(gamePlayers).values({
-          gameId: this.matchId!,
-          playerId: placement.playerId,
-          playerName: placement.name,
-          placement: placement.placement,
-          kills: placement.kills,
-          damageDealt: 0,
-          survivalTicks,
-          eloChange,
+        // 1. Insert game record
+        tx.insert(games).values({
+          id: matchId,
+          seed: this.gameSeed,
+          playerCount: result.placements.length,
+          winnerId: result.winnerId,
+          winnerName: winnerPlayer?.name ?? null,
+          reason: result.reason,
+          totalTicks: result.totalTicks,
+          durationS,
+          timestamp: new Date(now),
         }).run();
 
-        // Upsert agent_stats
-        const existing = this.db.select().from(agentStats)
-          .where(eq(agentStats.agentName, nameLower))
-          .get();
-
-        if (existing) {
-          const isWin = placement.placement === 1;
-          this.db.update(agentStats)
-            .set({
-              wins: existing.wins + (isWin ? 1 : 0),
-              losses: existing.losses + (isWin ? 0 : 1),
-              elo: existing.elo + eloChange,
-              lastSeen: new Date(now),
-            })
-            .where(eq(agentStats.agentName, nameLower))
-            .run();
-        } else {
-          this.db.insert(agentStats).values({
-            agentName: nameLower,
-            displayName: placement.name,
-            wins: placement.placement === 1 ? 1 : 0,
-            losses: placement.placement === 1 ? 0 : 1,
-            draws: 0,
-            elo: 1000 + eloChange,
-            lastSeen: new Date(now),
-          }).run();
+        // 2. Get current Elo for all players
+        const playerElos: Array<{ name: string; elo: number; placement: number }> = [];
+        for (const placement of result.placements) {
+          const existing = tx.select().from(agentStats)
+            .where(eq(agentStats.agentName, placement.name.toLowerCase()))
+            .get();
+          playerElos.push({
+            name: placement.name.toLowerCase(),
+            elo: existing?.elo ?? 1000,
+            placement: placement.placement,
+          });
         }
-      }
 
-      // 5. Persist intent log for replay
-      if (this.intentLog.length > 0) {
-        for (const entry of this.intentLog) {
-          this.db.insert(intentsTable).values({
-            gameId: this.matchId!,
+        // 3. Compute Elo changes
+        const eloChanges = computeMultiplayerElo(playerElos);
+
+        // 4. Insert game_players and update agent_stats
+        for (const placement of result.placements) {
+          const nameLower = placement.name.toLowerCase();
+          const eloChange = eloChanges.get(nameLower) ?? 0;
+          const player = state.players.get(placement.playerId);
+          const survivalTicks = player?.deathTick ?? state.tick;
+
+          tx.insert(gamePlayers).values({
+            gameId: matchId,
+            playerId: placement.playerId,
+            playerName: placement.name,
+            placement: placement.placement,
+            kills: placement.kills,
+            damageDealt: 0,
+            survivalTicks,
+            eloChange,
+          }).run();
+
+          // Upsert agent_stats
+          const existing = tx.select().from(agentStats)
+            .where(eq(agentStats.agentName, nameLower))
+            .get();
+
+          if (existing) {
+            const isWin = placement.placement === 1;
+            tx.update(agentStats)
+              .set({
+                wins: existing.wins + (isWin ? 1 : 0),
+                losses: existing.losses + (isWin ? 0 : 1),
+                elo: existing.elo + eloChange,
+                lastSeen: new Date(now),
+              })
+              .where(eq(agentStats.agentName, nameLower))
+              .run();
+          } else {
+            tx.insert(agentStats).values({
+              agentName: nameLower,
+              displayName: placement.name,
+              wins: placement.placement === 1 ? 1 : 0,
+              losses: placement.placement === 1 ? 0 : 1,
+              draws: 0,
+              elo: 1000 + eloChange,
+              lastSeen: new Date(now),
+            }).run();
+          }
+        }
+
+        // 5. Persist intent log for replay (batched in same transaction)
+        for (const entry of intentLog) {
+          tx.insert(intentsTable).values({
+            gameId: matchId,
             tick: entry.tick,
             playerId: entry.playerId,
             action: entry.intent.action,
             direction: entry.intent.dir ?? null,
           }).run();
         }
-      }
+      });
 
-      console.log(`[DB] Persisted match ${this.matchId} (${this.lastResult.placements.length} players, ${this.intentLog.length} intents)`);
+      console.log(`[DB] Persisted match ${matchId} (${result.placements.length} players, ${intentLog.length} intents)`);
     } catch (e) {
       console.error("[DB] Failed to persist game result:", e);
     }
