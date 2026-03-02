@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DirectionSchema, GamePhaseSchema, PickupKindSchema } from "./schemas.js";
+import { DirectionSchema, GamePhaseSchema, PickupKindSchema, ActionSchema } from "./schemas.js";
 
 // ═══════════════════════════════════════════════
 // GridRoyale — WebSocket Messages (Viewer)
@@ -51,6 +51,17 @@ export const ViewerKillEventSchema = z.object({
   weapon: z.enum(["projectile", "zone"]),
 });
 
+// ── Player Action Entry (for command history) ──
+
+export const ViewerActionEntrySchema = z.object({
+  playerId: z.string(),
+  playerName: z.string(),
+  action: ActionSchema,
+  dir: DirectionSchema.optional(),
+  success: z.boolean(),
+  reason: z.string().optional(),
+});
+
 // ── Server → Viewer Messages ──
 
 export const ViewerStateMessageSchema = z.object({
@@ -63,6 +74,7 @@ export const ViewerStateMessageSchema = z.object({
   zone: ViewerZoneSchema,
   killFeed: z.array(ViewerKillEventSchema),
   playersAlive: z.number().int(),
+  lastActions: z.array(ViewerActionEntrySchema).optional(),
 });
 
 export const ViewerLobbyMessageSchema = z.object({
@@ -88,10 +100,16 @@ export const ViewerGameOverMessageSchema = z.object({
   })),
 });
 
+export const ViewerCatchUpMessageSchema = z.object({
+  type: z.literal("catch_up"),
+  frames: z.array(ViewerStateMessageSchema),
+});
+
 export const ViewerMessageSchema = z.discriminatedUnion("type", [
   ViewerStateMessageSchema,
   ViewerLobbyMessageSchema,
   ViewerGameOverMessageSchema,
+  ViewerCatchUpMessageSchema,
 ]);
 
 // ── Inferred Types ──
@@ -101,7 +119,9 @@ export type ViewerProjectile = z.infer<typeof ViewerProjectileSchema>;
 export type ViewerPickup = z.infer<typeof ViewerPickupSchema>;
 export type ViewerZone = z.infer<typeof ViewerZoneSchema>;
 export type ViewerKillEvent = z.infer<typeof ViewerKillEventSchema>;
+export type ViewerActionEntry = z.infer<typeof ViewerActionEntrySchema>;
 export type ViewerStateMessage = z.infer<typeof ViewerStateMessageSchema>;
 export type ViewerLobbyMessage = z.infer<typeof ViewerLobbyMessageSchema>;
 export type ViewerGameOverMessage = z.infer<typeof ViewerGameOverMessageSchema>;
+export type ViewerCatchUpMessage = z.infer<typeof ViewerCatchUpMessageSchema>;
 export type ViewerMessage = z.infer<typeof ViewerMessageSchema>;

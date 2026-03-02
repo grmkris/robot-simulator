@@ -1,4 +1,5 @@
 import { useArenaStore } from "../lib/store";
+import { CommandLog } from "./CommandLog";
 
 export function GameHUD() {
   const { phase, tick, playersAlive, players, zone, countdown, killFeed, winnerName, winReason, placements } =
@@ -71,6 +72,9 @@ export function GameHUD() {
           ))}
         </div>
       )}
+
+      {/* Command history (bottom right) */}
+      {(phase === "active" || phase === "countdown") && <CommandLog />}
 
       {/* Game over overlay */}
       {phase === "finished" && (

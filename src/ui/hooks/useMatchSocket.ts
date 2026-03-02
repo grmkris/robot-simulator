@@ -16,7 +16,7 @@ export function useMatchSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCount = useRef(0);
-  const { setConnected, updateState, setGameOver, updateLobby, reset } =
+  const { setConnected, updateState, setGameOver, updateLobby, enterCatchUp, exitCatchUp, reset } =
     useArenaStore();
 
   useEffect(() => {
@@ -45,9 +45,18 @@ export function useMatchSocket() {
         if (unmounted) return;
         try {
           const msg = JSON.parse(event.data) as ServerViewerMessage;
-          if (msg.type === "state") {
-            updateState(msg);
+          if (msg.type === "catch_up") {
+            enterCatchUp(msg.frames);
+          } else if (msg.type === "state") {
+            // Skip live state messages while catching up
+            if (!useArenaStore.getState().catchUpMode) {
+              updateState(msg);
+            }
           } else if (msg.type === "game_over") {
+            // Always process game_over — exits catch-up if active
+            if (useArenaStore.getState().catchUpMode) {
+              exitCatchUp();
+            }
             setGameOver(msg);
           } else if (msg.type === "lobby") {
             updateLobby(msg);
@@ -80,5 +89,5 @@ export function useMatchSocket() {
       wsRef.current?.close();
       reset();
     };
-  }, [setConnected, updateState, setGameOver, updateLobby, reset]);
+  }, [setConnected, updateState, setGameOver, updateLobby, enterCatchUp, exitCatchUp, reset]);
 }

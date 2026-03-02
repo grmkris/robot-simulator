@@ -1,8 +1,8 @@
 /** Viewer-side types for grid arena state received via WebSocket */
 
-import type { Direction, PickupKind, GamePhase } from "../../shared/types.js";
+import type { Direction, PickupKind, GamePhase, Action } from "../../shared/types.js";
 
-export type { Direction, PickupKind, GamePhase };
+export type { Direction, PickupKind, GamePhase, Action };
 
 // ── Viewer State Types ──
 
@@ -50,6 +50,17 @@ export interface ViewerKillEvent {
   weapon: "projectile" | "zone";
 }
 
+// ── Player Action Entry (for command history) ──
+
+export interface ViewerActionEntry {
+  playerId: string;
+  playerName: string;
+  action: Action;
+  dir?: Direction;
+  success: boolean;
+  reason?: string;
+}
+
 // ── WebSocket Messages ──
 
 export interface ViewerStateMessage {
@@ -62,6 +73,7 @@ export interface ViewerStateMessage {
   zone: ViewerZone;
   killFeed: ViewerKillEvent[];
   playersAlive: number;
+  lastActions?: ViewerActionEntry[];
 }
 
 export interface ViewerLobbyMessage {
@@ -84,7 +96,12 @@ export interface ViewerGameOverMessage {
   }>;
 }
 
-export type ServerViewerMessage = ViewerStateMessage | ViewerLobbyMessage | ViewerGameOverMessage;
+export interface ViewerCatchUpMessage {
+  type: "catch_up";
+  frames: ViewerStateMessage[];
+}
+
+export type ServerViewerMessage = ViewerStateMessage | ViewerLobbyMessage | ViewerGameOverMessage | ViewerCatchUpMessage;
 
 /** Leaderboard entry from REST API */
 export interface LeaderboardEntry {

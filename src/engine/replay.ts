@@ -84,6 +84,17 @@ function stateToFrame(state: GameState): ViewerStateMessage {
       };
     });
 
+  const lastActions = state.actionResults.size > 0
+    ? Array.from(state.actionResults.entries()).map(([playerId, ar]) => ({
+        playerId,
+        playerName: state.players.get(playerId)?.name ?? "unknown",
+        action: ar.action,
+        dir: ar.dir,
+        success: ar.success,
+        reason: ar.reason,
+      }))
+    : undefined;
+
   return {
     type: "state" as const,
     tick: state.tick,
@@ -109,5 +120,6 @@ function stateToFrame(state: GameState): ViewerStateMessage {
     },
     killFeed,
     playersAlive: Array.from(state.players.values()).filter((p) => p.alive).length,
+    lastActions,
   };
 }
