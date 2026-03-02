@@ -20,9 +20,10 @@
 
 import type { GameManager } from "../game/game-manager.js";
 import type { AppDatabase } from "../db/client.js";
-import { agentStats } from "../db/schema.js";
-import { desc } from "drizzle-orm";
+import { agentStats, games, gamePlayers, intents } from "../db/schema.js";
+import { desc, eq } from "drizzle-orm";
 import { QueueRequestSchema, ActRequestSchema, StepRequestSchema } from "../shared/schemas.js";
+import { replayGame } from "../engine/replay.js";
 import {
   GRID_W,
   GRID_H,
@@ -357,5 +358,115 @@ export function createApiRoutes(gm: GameManager, db: AppDatabase) {
         });
       },
     },
+
+    // ═══════════════════════════════════════
+    // Replay Endpoints
+    // ═══════════════════════════════════════
+
+    "/api/replays": {
+      GET(req: Request) {
+        const url = new URL(req.url);
+        const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "20"), 100);
+        const offset = parseInt(url.searchParams.get("offset") ?? "0");
+
+        const matchRows = db
+          .select()
+          .from(games)
+          .orderBy(desc(games.timestamp))
+          .limit(limit)
+          .offset(offset)
+          .all();
+
+        const matches = matchRows.map((g) => {
+          const players = db
+            .select()
+            .from(gamePlayers)
+            .where(eq(gamePlayers.gameId, g.id))
+            .all();
+
+          return {
+            id: g.id,
+            seed: g.seed,
+            playerCount: g.playerCount,
+            winnerName: g.winnerName,
+            reason: g.reason,
+            totalTicks: g.totalTicks,
+            durationS: g.durationS,
+            timestamp: g.timestamp,
+            players: players.map((p) => ({
+              name: p.playerName,
+              placement: p.placement,
+              kills: p.kills,
+              eloChange: p.eloChange,
+            })),
+          };
+        });
+
+        return jsonResponse({ matches });
+      },
+      OPTIONS() {
+        return new Response(null, { status: 204, headers: corsHeaders });
+      },
+    },
   } as Record<string, Record<string, (req: Request) => Response | Promise<Response>>>;
+}
+
+// ── Dynamic Replay Route (called from server.ts fetch handler) ──
+
+export function handleReplayById(
+  _req: Request,
+  gameId: string,
+  db: AppDatabase,
+): Response {
+  const game = db.select().from(games).where(eq(games.id, gameId)).get();
+  if (!game) {
+    return jsonResponse({ error: "Match not found" }, 404);
+  }
+
+  const players = db
+    .select()
+    .from(gamePlayers)
+    .where(eq(gamePlayers.gameId, gameId))
+    .all();
+
+  const intentRows = db
+    .select()
+    .from(intents)
+    .where(eq(intents.gameId, gameId))
+    .all();
+
+  const playerInfos = players.map((p) => ({
+    id: p.playerId,
+    name: p.playerName,
+  }));
+
+  const intentLog = intentRows.map((i) => ({
+    tick: i.tick,
+    playerId: i.playerId,
+    action: i.action,
+    direction: i.direction,
+  }));
+
+  const frames = replayGame(game.seed, playerInfos, intentLog, game.totalTicks);
+
+  return jsonResponse({
+    match: {
+      id: game.id,
+      seed: game.seed,
+      playerCount: game.playerCount,
+      winnerName: game.winnerName,
+      reason: game.reason,
+      totalTicks: game.totalTicks,
+      durationS: game.durationS,
+      timestamp: game.timestamp,
+    },
+    players: players.map((p) => ({
+      id: p.playerId,
+      name: p.playerName,
+      placement: p.placement,
+      kills: p.kills,
+      eloChange: p.eloChange,
+    })),
+    frames,
+  });
 }

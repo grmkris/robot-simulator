@@ -13,7 +13,7 @@ import index from "./ui/index.html";
 import { env } from "./env.js";
 import { createDb } from "./db/client.js";
 import { GameManager } from "./game/game-manager.js";
-import { createApiRoutes } from "./routes/api.js";
+import { createApiRoutes, handleReplayById } from "./routes/api.js";
 import { createMcpHandler } from "./mcp/streamable-http.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -170,6 +170,15 @@ const server = Bun.serve({
     if (url.pathname === "/ws/spectator") {
       if (server.upgrade(req)) return undefined as unknown as Response;
       return new Response("WebSocket upgrade failed", { status: 400 });
+    }
+
+    // API: GET /api/replays/:id — full replay data
+    const replayMatch = url.pathname.match(/^\/api\/replays\/([^/]+)$/);
+    if (replayMatch && req.method === "GET") {
+      return handleReplayById(req, replayMatch[1]!, db);
+    }
+    if (replayMatch && req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders });
     }
 
     // SPA fallback for /replays/:id
