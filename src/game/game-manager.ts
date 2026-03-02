@@ -40,6 +40,14 @@ export interface SSEClient {
   controller: ReadableStreamDefaultController;
 }
 
+export interface GameEvent {
+  type: "lobby" | "observation" | "game_start" | "game_over";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  data: any;
+}
+
+export type GameEventCallback = (event: GameEvent) => void;
+
 // ── Match ID ──
 
 function generateMatchId(): string {
@@ -78,6 +86,9 @@ export class GameManager {
 
   // ── SSE clients ──
   private sseClients: SSEClient[] = [];
+
+  // ── MCP push observers ──
+  private mcpObservers = new Map<string, GameEventCallback>();
 
   // ── Spectators (WebSocket) ──
   private spectators = new Set<ServerWebSocket<unknown>>();
@@ -400,6 +411,22 @@ export class GameManager {
   }
 
   // ══════════════════════════════════════════
+  // MCP Push Observers
+  // ══════════════════════════════════════════
+
+  /** Register a callback that receives game events for a specific player */
+  registerObserver(playerId: string, callback: GameEventCallback): void {
+    this.mcpObservers.set(playerId, callback);
+    console.log(`[GM] Observer registered for player ${playerId.slice(0, 8)}…`);
+  }
+
+  /** Unregister the observer for a player */
+  unregisterObserver(playerId: string): void {
+    this.mcpObservers.delete(playerId);
+    console.log(`[GM] Observer unregistered for player ${playerId.slice(0, 8)}…`);
+  }
+
+  // ══════════════════════════════════════════
   // Internal — Game Lifecycle
   // ══════════════════════════════════════════
 
@@ -432,6 +459,9 @@ export class GameManager {
 
     // Broadcast initial state to spectators
     this.broadcastViewerState();
+
+    // Push game_start to MCP observers
+    this.pushMcpGameStart();
   }
 
   private tick(): void {
@@ -458,10 +488,11 @@ export class GameManager {
       this.pendingIntents.clear();
     }
 
-    // On decision ticks, notify br.step() waiters and SSE clients
+    // On decision ticks, notify br.step() waiters, SSE clients, and MCP observers
     if (this.state.tick % DECISION_INTERVAL === 0) {
       this.resolveStepWaiters();
       this.pushSSEObservations();
+      this.pushMcpObservations();
     }
 
     // Broadcast to viewer spectators
@@ -497,6 +528,9 @@ export class GameManager {
 
     // Push game over to SSE clients
     this.pushSSEEvent("end", this.lastResult);
+
+    // Push game over to MCP observers
+    this.pushMcpGameOver();
 
     // Broadcast game over to spectators
     const gameOverMsg: ViewerGameOverMessage = {
@@ -579,6 +613,40 @@ export class GameManager {
   }
 
   // ══════════════════════════════════════════
+  // Internal — MCP Push
+  // ══════════════════════════════════════════
+
+  private pushMcpObservations(): void {
+    if (!this.state || !this.matchId) return;
+
+    for (const [playerId, callback] of this.mcpObservers) {
+      try {
+        const obs = buildObservation(this.state, playerId, this.matchId);
+        if (obs) callback({ type: "observation", data: obs });
+      } catch { /* observer disconnected */ }
+    }
+  }
+
+  private pushMcpGameStart(): void {
+    if (!this.state || !this.matchId) return;
+
+    for (const [playerId, callback] of this.mcpObservers) {
+      try {
+        const obs = buildObservation(this.state, playerId, this.matchId);
+        callback({ type: "game_start", data: obs });
+      } catch { /* observer disconnected */ }
+    }
+  }
+
+  private pushMcpGameOver(): void {
+    for (const callback of this.mcpObservers.values()) {
+      try {
+        callback({ type: "game_over", data: { status: "finished", result: this.lastResult } });
+      } catch { /* observer disconnected */ }
+    }
+  }
+
+  // ══════════════════════════════════════════
   // Internal — Viewer Broadcasting
   // ══════════════════════════════════════════
 
@@ -592,6 +660,20 @@ export class GameManager {
   private broadcastLobbyState(): void {
     const msg = this.getLobbyState();
     this.broadcastToSpectators(msg);
+
+    // Push lobby updates to MCP observers
+    for (const callback of this.mcpObservers.values()) {
+      try {
+        callback({
+          type: "lobby",
+          data: {
+            status: msg.phase === "countdown" ? "countdown" : "waiting",
+            countdown: msg.countdown,
+            players: msg.players.map((p) => p.name),
+          },
+        });
+      } catch { /* observer disconnected */ }
+    }
   }
 
   private broadcastToSpectators(msg: unknown): void {

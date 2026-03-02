@@ -1,23 +1,23 @@
 // ═══════════════════════════════════════════════
 // GridRoyale — Streamable HTTP MCP Server
 //
-// Mounted on the game server at /mcp endpoint.
-// Each MCP session = one player. Tools call
-// GameManager directly (no HTTP proxy).
+// Push-based model: after queue, the server pushes
+// observations via SSE logging notifications on
+// every decision tick. step() is fire-and-forget.
 // ═══════════════════════════════════════════════
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import type { GameManager } from "../game/game-manager.js";
+import type { GameManager, GameEvent } from "../game/game-manager.js";
 import type { AppDatabase } from "../db/client.js";
 import { agentStats } from "../db/schema.js";
 import { desc } from "drizzle-orm";
 import { generateLlmTxt } from "../routes/api.js";
 import { formatObservation } from "./format.js";
 
-// ── Per-session player state ──
+// ── Per-session state ──
 
 interface McpPlayerSession {
   token: string;
@@ -25,10 +25,15 @@ interface McpPlayerSession {
   playerName: string;
 }
 
-// ── Session tracking ──
+interface McpSessionEntry {
+  transport: WebStandardStreamableHTTPServerTransport;
+  server: McpServer;
+  playerSession?: McpPlayerSession;
+}
 
-const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
-const sessionState = new Map<string, McpPlayerSession>();
+// ── Session tracking (module-level for handler closure) ──
+
+const sessions = new Map<string, McpSessionEntry>();
 
 // ── Factory ──
 
@@ -38,18 +43,18 @@ export function createMcpHandler(
 ): (req: Request) => Promise<Response> {
 
   function cleanupSession(sessionId: string): void {
-    const state = sessionState.get(sessionId);
-    if (state) {
-      try { gm.leave(state.token); } catch { /* already left */ }
-      sessionState.delete(sessionId);
+    const entry = sessions.get(sessionId);
+    if (entry?.playerSession) {
+      try { gm.unregisterObserver(entry.playerSession.playerId); } catch { /* already removed */ }
+      try { gm.leave(entry.playerSession.token); } catch { /* already left */ }
     }
-    transports.delete(sessionId);
+    sessions.delete(sessionId);
     console.log(`[MCP] Session ${sessionId.slice(0, 8)}… cleaned up`);
   }
 
   function createMcpServerWithTools(): McpServer {
     const server = new McpServer(
-      { name: "gridroyale", version: "7.0.0" },
+      { name: "gridroyale", version: "7.1.0" },
       { capabilities: { logging: {} } },
     );
 
@@ -69,7 +74,17 @@ export function createMcpHandler(
 
     server.tool(
       "gridroyale_queue",
-      "Join a GridRoyale game. Choose a unique name. You'll wait in the lobby until 2+ players are ready, then the game starts automatically after a 10-second countdown.",
+      `Join a GridRoyale game. Choose a unique name.
+
+After joining, game events are PUSHED to you via SSE notifications — you do NOT need to poll.
+You'll receive:
+- Lobby updates (player joins, countdown)
+- Game start with your first observation
+- Observations every decision tick (0.5s) during the game
+- Game over with final placements
+
+To play, call gridroyale_step with your action when you receive an observation.
+The step tool submits your action instantly (fire-and-forget) — the next observation comes via SSE.`,
       {
         name: z.string().min(1).max(20).describe("Your bot name (unique, 1-20 chars)"),
       },
@@ -79,10 +94,14 @@ export function createMcpHandler(
           return { content: [{ type: "text" as const, text: "Internal error: no MCP session" }] };
         }
 
-        if (sessionState.has(sid)) {
-          const existing = sessionState.get(sid)!;
+        const entry = sessions.get(sid);
+        if (!entry) {
+          return { content: [{ type: "text" as const, text: "Internal error: session not found" }] };
+        }
+
+        if (entry.playerSession) {
           return {
-            content: [{ type: "text" as const, text: `Already in a session as "${existing.playerName}". Use gridroyale_leave first.` }],
+            content: [{ type: "text" as const, text: `Already in a session as "${entry.playerSession.playerName}". Use gridroyale_leave first.` }],
           };
         }
 
@@ -91,10 +110,28 @@ export function createMcpHandler(
           return { content: [{ type: "text" as const, text: `Failed to queue: ${result.error}` }] };
         }
 
-        sessionState.set(sid, {
+        // Store player session
+        entry.playerSession = {
           token: result.token,
           playerId: result.playerId,
           playerName: name,
+        };
+
+        // Register push observer — game events are pushed via SSE logging notifications
+        gm.registerObserver(result.playerId, (event: GameEvent) => {
+          try {
+            const formatted = formatObservation(event.data, name, result.playerId);
+            const prefix = event.type === "game_start" ? "🎮 GAME STARTED!\n\n"
+              : event.type === "game_over" ? "🏁 GAME OVER!\n\n"
+              : event.type === "lobby" ? "📋 LOBBY UPDATE\n\n"
+              : "";
+            server.sendLoggingMessage(
+              { level: "info", data: prefix + formatted },
+              sid,
+            );
+          } catch {
+            // Client disconnected — will be cleaned up
+          }
         });
 
         return {
@@ -105,23 +142,24 @@ export function createMcpHandler(
               "",
               "You're in the lobby. The game starts when 2+ players join (10s countdown).",
               "",
-              "Now call `gridroyale_step` repeatedly to:",
-              "1. Wait through the lobby/countdown",
-              "2. Receive game observations",
-              "3. Submit your action each turn",
+              "## Push-Based Model",
+              "Game events are now PUSHED to you via SSE notifications automatically:",
+              "- Lobby updates, countdown, game start, observations, game over",
+              "- You'll see them as logging messages in your SSE stream",
               "",
-              "The step tool blocks until the next decision tick (0.5s), then returns your observation.",
+              "When you receive an observation, call `gridroyale_step` with your action.",
+              "The step tool returns instantly — the next observation arrives via SSE.",
             ].join("\n"),
           }],
         };
       },
     );
 
-    // ── Tool: step ──
+    // ── Tool: step (fire-and-forget) ──
 
     server.tool(
       "gridroyale_step",
-      `Submit your action and receive the next game observation. This is the main gameplay loop — call it repeatedly.
+      `Submit your action for this turn. Returns immediately — the next observation will be pushed via SSE.
 
 Actions:
 - MOVE: Move 1 tile in direction (N/E/S/W)
@@ -130,7 +168,8 @@ Actions:
 - PICKUP: Collect item on your tile
 - NOOP: Do nothing (or omit action entirely)
 
-The call blocks ~0.5s until the next decision tick, then returns your fog-filtered observation.`,
+This is fire-and-forget: your action is submitted and the tool returns immediately.
+The next observation will arrive as an SSE notification on the next decision tick.`,
       {
         action: z
           .enum(["MOVE", "DASH", "SHOOT", "PICKUP", "NOOP"])
@@ -143,8 +182,9 @@ The call blocks ~0.5s until the next decision tick, then returns your fog-filter
       },
       async ({ action, direction }, extra) => {
         const sid = extra.sessionId;
-        const state = sid ? sessionState.get(sid) : undefined;
-        if (!state) {
+        const entry = sid ? sessions.get(sid) : undefined;
+        const ps = entry?.playerSession;
+        if (!ps) {
           return { content: [{ type: "text" as const, text: "Not in a game. Call gridroyale_queue first." }] };
         }
 
@@ -152,27 +192,24 @@ The call blocks ~0.5s until the next decision tick, then returns your fog-filter
         const actionPayload: { t: string; dir?: string } | undefined =
           action && action !== "NOOP" ? { t: action, dir: direction } : undefined;
 
-        // SSE notification: confirm action received
-        try {
-          await server.sendLoggingMessage(
-            {
-              level: "info",
-              data: action ? `Action: ${action}${direction ? " " + direction : ""}. Waiting for tick...` : "NOOP — waiting for next tick...",
-            },
-            sid,
-          );
-        } catch { /* client may not support logging */ }
-
-        // This blocks ~0.5s until next decision tick
-        const obs = await gm.step(state.token, actionPayload);
-        const formatted = formatObservation(obs, state.playerName, state.playerId);
-
-        // Clear session state on game end
-        if (obs?.status === "finished") {
-          sessionState.delete(sid!);
+        // Fire-and-forget: submit action via act(), return immediately
+        if (actionPayload) {
+          const result = gm.act(ps.token, actionPayload);
+          if (!result.ok) {
+            return { content: [{ type: "text" as const, text: `Action failed: ${result.error}` }] };
+          }
         }
 
-        return { content: [{ type: "text" as const, text: formatted }] };
+        const desc = action && action !== "NOOP"
+          ? `${action}${direction ? " " + direction : ""}`
+          : "NOOP";
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Action submitted: ${desc}. Next observation will arrive via SSE.`,
+          }],
+        };
       },
     );
 
@@ -184,15 +221,16 @@ The call blocks ~0.5s until the next decision tick, then returns your fog-filter
       {},
       async (_args, extra) => {
         const sid = extra.sessionId;
-        const state = sid ? sessionState.get(sid) : undefined;
-        if (!state) {
+        const entry = sid ? sessions.get(sid) : undefined;
+        const ps = entry?.playerSession;
+        if (!ps) {
           return { content: [{ type: "text" as const, text: "Not in a game. Call gridroyale_queue first." }] };
         }
 
-        const obs = gm.observe(state.token);
+        const obs = gm.observe(ps.token);
         if (!obs) return { content: [{ type: "text" as const, text: "No observation available." }] };
 
-        const formatted = formatObservation(obs, state.playerName, state.playerId);
+        const formatted = formatObservation(obs, ps.playerName, ps.playerId);
         return { content: [{ type: "text" as const, text: formatted }] };
       },
     );
@@ -205,14 +243,17 @@ The call blocks ~0.5s until the next decision tick, then returns your fog-filter
       {},
       async (_args, extra) => {
         const sid = extra.sessionId;
-        const state = sid ? sessionState.get(sid) : undefined;
-        if (!state) {
+        const entry = sid ? sessions.get(sid) : undefined;
+        const ps = entry?.playerSession;
+        if (!ps) {
           return { content: [{ type: "text" as const, text: "Not in a game." }] };
         }
 
-        gm.leave(state.token);
-        const name = state.playerName;
-        sessionState.delete(sid!);
+        // Unregister observer first
+        gm.unregisterObserver(ps.playerId);
+        gm.leave(ps.token);
+        const name = ps.playerName;
+        entry!.playerSession = undefined;
         return { content: [{ type: "text" as const, text: `Left the game as "${name}".` }] };
       },
     );
@@ -246,7 +287,6 @@ The call blocks ~0.5s until the next decision tick, then returns your fog-filter
   // ── Request Handler ──
 
   return async function handleMcpRequest(req: Request): Promise<Response> {
-    // Handle POST, GET, DELETE per MCP Streamable HTTP spec
     const method = req.method;
 
     if (method === "POST") {
@@ -263,17 +303,18 @@ The call blocks ~0.5s until the next decision tick, then returns your fog-filter
 
       const sessionId = req.headers.get("mcp-session-id");
 
-      if (sessionId && transports.has(sessionId)) {
+      if (sessionId && sessions.has(sessionId)) {
         // Existing session — route to its transport
-        return transports.get(sessionId)!.handleRequest(req, { parsedBody: body });
+        return sessions.get(sessionId)!.transport.handleRequest(req, { parsedBody: body });
       }
 
       if (!sessionId && isInitializeRequest(body)) {
-        // New session — create transport + server
+        // New session — create transport + server pair
         const transport = new WebStandardStreamableHTTPServerTransport({
           sessionIdGenerator: () => crypto.randomUUID(),
           onsessioninitialized: (sid) => {
-            transports.set(sid, transport);
+            const server = mcpServer;
+            sessions.set(sid, { transport, server });
             console.log(`[MCP] New session: ${sid.slice(0, 8)}…`);
           },
           onsessionclosed: (sid) => {
@@ -287,13 +328,12 @@ The call blocks ~0.5s until the next decision tick, then returns your fog-filter
           }
         };
 
-        const server = createMcpServerWithTools();
-        await server.connect(transport);
+        const mcpServer = createMcpServerWithTools();
+        await mcpServer.connect(transport);
 
         return transport.handleRequest(req, { parsedBody: body });
       }
 
-      // Invalid: no session and not initialization
       return new Response(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -305,21 +345,20 @@ The call blocks ~0.5s until the next decision tick, then returns your fog-filter
     }
 
     if (method === "GET") {
-      // SSE stream — must have valid session
+      // SSE stream — persistent connection for push notifications
       const sessionId = req.headers.get("mcp-session-id");
-      if (!sessionId || !transports.has(sessionId)) {
+      if (!sessionId || !sessions.has(sessionId)) {
         return new Response("Invalid or missing session ID", { status: 400 });
       }
-      return transports.get(sessionId)!.handleRequest(req);
+      return sessions.get(sessionId)!.transport.handleRequest(req);
     }
 
     if (method === "DELETE") {
-      // Session termination
       const sessionId = req.headers.get("mcp-session-id");
-      if (!sessionId || !transports.has(sessionId)) {
+      if (!sessionId || !sessions.has(sessionId)) {
         return new Response("Invalid or missing session ID", { status: 400 });
       }
-      return transports.get(sessionId)!.handleRequest(req);
+      return sessions.get(sessionId)!.transport.handleRequest(req);
     }
 
     return new Response("Method not allowed", { status: 405 });
