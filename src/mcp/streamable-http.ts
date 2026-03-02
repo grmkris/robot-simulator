@@ -74,17 +74,7 @@ export function createMcpHandler(
 
     server.tool(
       "gridroyale_queue",
-      `Join a GridRoyale game. Choose a unique name.
-
-After joining, game events are PUSHED to you via SSE notifications — you do NOT need to poll.
-You'll receive:
-- Lobby updates (player joins, countdown)
-- Game start with your first observation
-- Observations every decision tick (0.5s) during the game
-- Game over with final placements
-
-To play, call gridroyale_step with your action when you receive an observation.
-The step tool submits your action instantly (fire-and-forget) — the next observation comes via SSE.`,
+      `Join a GridRoyale game. Choose a unique name. You'll wait in the lobby until 2+ players are ready, then the game starts automatically after a 10-second countdown.`,
       {
         name: z.string().min(1).max(20).describe("Your bot name (unique, 1-20 chars)"),
       },
@@ -142,24 +132,22 @@ The step tool submits your action instantly (fire-and-forget) — the next obser
               "",
               "You're in the lobby. The game starts when 2+ players join (10s countdown).",
               "",
-              "## Push-Based Model",
-              "Game events are now PUSHED to you via SSE notifications automatically:",
-              "- Lobby updates, countdown, game start, observations, game over",
-              "- You'll see them as logging messages in your SSE stream",
-              "",
-              "When you receive an observation, call `gridroyale_step` with your action.",
-              "The step tool returns instantly — the next observation arrives via SSE.",
+              "Now call `gridroyale_step` repeatedly in a loop:",
+              "- During lobby: call with no action to poll for game start",
+              "- During game: call with your action (MOVE/DASH/SHOOT/PICKUP/NOOP) + direction",
+              "- Each step blocks until the next decision tick (~0.5s) and returns your observation",
+              "- Keep calling until the game ends (status: finished)",
             ].join("\n"),
           }],
         };
       },
     );
 
-    // ── Tool: step (fire-and-forget) ──
+    // ── Tool: step (blocking — waits for next decision tick) ──
 
     server.tool(
       "gridroyale_step",
-      `Submit your action for this turn. Returns immediately — the next observation will be pushed via SSE.
+      `Submit your action and receive the next game observation. This is the main gameplay loop — call it repeatedly.
 
 Actions:
 - MOVE: Move 1 tile in direction (N/E/S/W)
@@ -168,8 +156,7 @@ Actions:
 - PICKUP: Collect item on your tile
 - NOOP: Do nothing (or omit action entirely)
 
-This is fire-and-forget: your action is submitted and the tool returns immediately.
-The next observation will arrive as an SSE notification on the next decision tick.`,
+The call blocks ~0.5s until the next decision tick, then returns your fog-filtered observation.`,
       {
         action: z
           .enum(["MOVE", "DASH", "SHOOT", "PICKUP", "NOOP"])
@@ -192,24 +179,16 @@ The next observation will arrive as an SSE notification on the next decision tic
         const actionPayload: { t: string; dir?: string } | undefined =
           action && action !== "NOOP" ? { t: action, dir: direction } : undefined;
 
-        // Fire-and-forget: submit action via act(), return immediately
-        if (actionPayload) {
-          const result = gm.act(ps.token, actionPayload);
-          if (!result.ok) {
-            return { content: [{ type: "text" as const, text: `Action failed: ${result.error}` }] };
-          }
+        // Blocking step: submit action, wait for next decision tick, return observation
+        const result = await gm.step(ps.token, actionPayload ?? undefined);
+
+        if (!result) {
+          return { content: [{ type: "text" as const, text: "No observation available. You may not be in a game." }] };
         }
 
-        const desc = action && action !== "NOOP"
-          ? `${action}${direction ? " " + direction : ""}`
-          : "NOOP";
-
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Action submitted: ${desc}. Next observation will arrive via SSE.`,
-          }],
-        };
+        // Format the observation
+        const formatted = formatObservation(result, ps.playerName, ps.playerId);
+        return { content: [{ type: "text" as const, text: formatted }] };
       },
     );
 
