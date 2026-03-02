@@ -95,6 +95,7 @@ export class GameManager {
   private submittedIntents = new Set<string>();
   private decisionTimeout: ReturnType<typeof setTimeout> | null = null;
   private waitingForDecisions = false;
+  private consecutiveEmptyDecisions = 0; // track zombie games
 
   // ── Spectators (WebSocket) ──
   private spectators = new Set<ServerWebSocket<unknown>>();
@@ -458,6 +459,7 @@ export class GameManager {
     this.stepWaiters = [];
     this.submittedIntents.clear();
     this.waitingForDecisions = false;
+    this.consecutiveEmptyDecisions = 0;
     if (this.decisionTimeout) { clearTimeout(this.decisionTimeout); this.decisionTimeout = null; }
 
     const playerInfos = lobbyPlayers.map((p) => ({
@@ -581,7 +583,32 @@ export class GameManager {
 
     // Set up timeout — advance even if not all players submitted
     this.decisionTimeout = setTimeout(() => {
-      console.log(`[Game] Decision timeout — advancing with ${this.submittedIntents.size}/${this.getAlivePlayerIds().length} submitted`);
+      const submitted = this.submittedIntents.size;
+      const alive = this.getAlivePlayerIds().length;
+      console.log(`[Game] Decision timeout — advancing with ${submitted}/${alive} submitted`);
+
+      // Track zombie games (0 submissions = nobody is playing)
+      if (submitted === 0) {
+        this.consecutiveEmptyDecisions++;
+        console.log(`[Game] Consecutive empty decisions: ${this.consecutiveEmptyDecisions}/3`);
+        if (this.consecutiveEmptyDecisions >= 3) {
+          console.log(`[Game] Zombie game detected — force-ending (no submissions for 3 consecutive decisions)`);
+          // Kill all alive players to force game end
+          if (this.state) {
+            for (const [id, player] of this.state.players) {
+              if (player.alive) {
+                this.state.players.set(id, { ...player, alive: false, hp: 0, deathTick: this.state.tick });
+              }
+            }
+            this.state = { ...this.state, phase: "finished" as const };
+          }
+          this.handleGameEnd();
+          return;
+        }
+      } else {
+        this.consecutiveEmptyDecisions = 0;
+      }
+
       this.resumeTicking();
     }, DECISION_WAIT_TIMEOUT_MS);
   }
@@ -593,6 +620,7 @@ export class GameManager {
 
     if (allSubmitted && this.waitingForDecisions) {
       console.log(`[Game] All ${aliveIds.length} players submitted — resuming`);
+      this.consecutiveEmptyDecisions = 0; // healthy game
       if (this.decisionTimeout) {
         clearTimeout(this.decisionTimeout);
         this.decisionTimeout = null;
